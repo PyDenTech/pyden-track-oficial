@@ -1,0 +1,19 @@
+body {
+  padding-top: 64px;
+  background: #f8f9fa;
+}
+
+/* toolbar */
+#dt-toolbar { min-height: 42px; }
+#dt-left .dataTables_length,
+#dt-left .dataTables_filter { margin: 0 !important; }
+#dt-left .dataTables_filter input { width: 260px; }
+
+/* tabela */
+.card { border: none; }
+.table-hover tbody tr:hover { background-color: rgba(0, 123, 255, 0.05); }
+
+.font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+/* não truncar nome do usuário no topo */
+.nav-user-name { max-width: none !important; white-space: nowrap; }

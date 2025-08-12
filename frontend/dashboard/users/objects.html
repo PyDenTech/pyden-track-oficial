@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Administração – Veículos (Dispositivos)</title>
+    <link rel="icon" href="/assets/favicon.png" type="image/png" />
+
+    <!-- Bootstrap & Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet" />
+
+    <!-- DataTables (lista de dispositivos) -->
+    <link href="https://cdn.datatables.net/1.13.4/css/dataTables.bootstrap5.min.css" rel="stylesheet" />
+
+    <!-- Estilos globais e da página -->
+    <link rel="stylesheet" href="/css/dashboard.css" />
+    <link rel="stylesheet" href="/css/objects-users.css" />
+</head>
+
+<body>
+    <!-- notificações -->
+    <div id="notification-container"></div>
+
+    <!-- Navbar (igual ao clients, “Veículos” ativo) -->
+    <nav class="navbar fixed-top bg-white shadow-sm px-4">
+        <a class="navbar-brand" href="/" title="Home">
+            <img src="/assets/logo.png" alt="Logo" height="30" />
+        </a>
+        <ul class="navbar-nav ms-auto d-flex flex-row align-items-center gap-3">
+            <li class="nav-item">
+                <a class="nav-link p-2" href="/dashboard/objects.html" title="Mapa"><i
+                        class="bi bi-map-fill fs-4"></i><span class="nav-label">Mapa</span></a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link p-2" href="/dashboard/users/clients.html" title="Usuários"><i
+                        class="bi bi-people-fill fs-4"></i><span class="nav-label">Usuários</span></a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link p-2 active" href="/dashboard/users/objects.html" title="Veículos"><i
+                        class="bi bi-truck-flatbed fs-4"></i><span class="nav-label">Veículos</span></a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link p-2" href="/dashboard/admin/personalize.html" title="Personalização"><i
+                        class="bi bi-gear-fill fs-4"></i><span class="nav-label">Personalização</span></a>
+            </li>
+            <!-- Perfil com nome(cargo) e dropdown -->
+            <li class="nav-item dropdown">
+                <a class="nav-link p-2" href="#" id="profileDD" data-bs-toggle="dropdown" title="Usuário">
+                    <i class="bi bi-person-circle fs-4"></i>
+                    <span id="user-info" class="nav-user-name">Carregando…</span>
+                    <i class="bi bi-caret-down-fill fs-6"></i>
+                </a>
+                <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="profileDD">
+                    <li><a class="dropdown-item" href="/dashboard/admin/personalize.html">Configurações</a></li>
+                    <li>
+                        <hr class="dropdown-divider" />
+                    </li>
+                    <li><a class="dropdown-item" href="#" id="logout-link">Sair</a></li>
+                </ul>
+            </li>
+        </ul>
+    </nav>
+
+    <main class="container-fluid mt-4 pt-2">
+        <h2 class="mb-4">Gestão de Dispositivos</h2>
+
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <!-- controles à esquerda (exibir/pesquisar) + botão à direita -->
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div class="d-flex align-items-center gap-3 control-icons">
+                        <i class="bi bi-eye fs-4" title="Exibir colunas"></i>
+                        <i class="bi bi-search fs-4" title="Pesquisar"></i>
+                    </div>
+                    <button class="btn btn-success" data-bs-toggle="modal" data-bs-target="#addDeviceModal">
+                        <i class="bi bi-plus-circle-fill"></i> Novo Dispositivo
+                    </button>
+                </div>
+
+                <table id="devices-table" class="table table-hover table-striped nowrap" style="width:100%">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Nome</th>
+                            <th>IMEI / ID</th>
+                            <th>Protocolo</th>
+                            <th>Grupo</th>
+                            <th>Operadora</th>
+                            <th>Status</th>
+                            <th>Último sinal</th>
+                            <th style="width:120px">Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <!-- =================== MODAL: NOVO DISPOSITIVO =================== -->
+    <div class="modal fade" id="addDeviceModal" tabindex="-1" aria-labelledby="addDeviceLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="addDeviceLabel">Adicionar novo dispositivo</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+
+                <div class="modal-body">
+                    <!-- abas -->
+                    <ul class="nav nav-tabs" id="deviceTabs" role="tablist">
+                        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab"
+                                data-bs-target="#tab-ident">Identificação</button></li>
+                        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab"
+                                data-bs-target="#tab-net">Conectividade</button></li>
+                        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab"
+                                data-bs-target="#tab-sms">Comandos SMS</button></li>
+                    </ul>
+
+                    <div class="tab-content pt-3">
+                        <!-- Identificação -->
+                        <div class="tab-pane fade show active" id="tab-ident">
+                            <form id="form-ident" class="row g-3">
+                                <div class="col-md-5">
+                                    <label class="form-label">Nome do dispositivo</label>
+                                    <input type="text" class="form-control" id="dev-name" required />
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">Protocolo</label>
+                                    <select id="dev-protocol" class="form-select" required>
+                                        <option value="J16">J16 (Voxter)</option>
+                                        <option value="GT06">GT06 (Concox/TK-series)</option>
+                                        <option value="GENERIC">Genérico</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Grupo</label>
+                                    <select id="dev-group" class="form-select">
+                                        <option value="unassigned">Desagrupado</option>
+                                    </select>
+                                </div>
+
+                                <div class="col-md-4">
+                                    <label class="form-label">IMEI (15 dígitos)</label>
+                                    <input type="text" class="form-control" id="dev-imei" pattern="\\d{15}" required />
+                                    <div class="form-text">GT06 usa IMEI como “Terminal ID”.</div>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">Número do chip (opcional)</label>
+                                    <input type="tel" class="form-control" id="dev-msisdn" />
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">Operadora (opcional)</label>
+                                    <select id="dev-carrier" class="form-select">
+                                        <option value="">—</option>
+                                        <option>Vivo</option>
+                                        <option>Claro</option>
+                                        <option>TIM</option>
+                                        <option>Oi</option>
+                                    </select>
+                                </div>
+
+                                <div class="col-12">
+                                    <label class="form-label">Observações</label>
+                                    <textarea class="form-control" id="dev-notes" rows="2"></textarea>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- Conectividade -->
+                        <div class="tab-pane fade" id="tab-net">
+                            <form id="form-net" class="row g-3">
+                                <div class="col-md-4">
+                                    <label class="form-label">APN</label>
+                                    <input type="text" class="form-control" id="apn-name"
+                                        placeholder="ex.: internet.claro.com.br" />
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">Usuário APN</label>
+                                    <input type="text" class="form-control" id="apn-user" />
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">Senha APN</label>
+                                    <input type="text" class="form-control" id="apn-pass" />
+                                </div>
+
+                                <div class="col-md-4">
+                                    <label class="form-label">Tipo de servidor</label>
+                                    <select id="srv-type" class="form-select">
+                                        <option value="dns">DNS</option>
+                                        <option value="ip">IP</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-5">
+                                    <label class="form-label">Host (DNS ou IP)</label>
+                                    <input type="text" class="form-control" id="srv-host"
+                                        placeholder="ex.: track.seudominio.com" />
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label">Porta</label>
+                                    <input type="number" class="form-control" id="srv-port" value="7002" />
+                                </div>
+
+                                <div class="col-md-4">
+                                    <label class="form-label">Fuso horário</label>
+                                    <select id="tz-offset" class="form-select">
+                                        <!-- -12..+14 em passos de 1h -->
+                                    </select>
+                                </div>
+                                <div class="col-md-4 j16-only">
+                                    <label class="form-label">Timer (IGN ligada, s)</label>
+                                    <input type="number" class="form-control" id="j16-timer-on" value="60" />
+                                </div>
+                                <div class="col-md-4 j16-only">
+                                    <label class="form-label">Timer (IGN desligada, s)</label>
+                                    <input type="number" class="form-control" id="j16-timer-off" value="3600" />
+                                </div>
+
+                                <div class="col-md-6 j16-only">
+                                    <label class="form-label">Ângulo de curva (graus)</label>
+                                    <input type="number" class="form-control" id="j16-angle" value="15" />
+                                    <div class="form-text">Com X=intervalo(s) e Y=ângulo (graus).</div>
+                                </div>
+                                <div class="col-md-6 j16-only">
+                                    <label class="form-label">IGN virtual (por acelerômetro)</label>
+                                    <select id="j16-acc-virtual" class="form-select">
+                                        <option value="0">Ligada (ACCLINE=0)</option>
+                                        <option value="1">Desligada (ACCLINE=1)</option>
+                                    </select>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- Comandos SMS (pré-visualização) -->
+                        <div class="tab-pane fade" id="tab-sms">
+                            <div id="sms-hint" class="alert alert-info small mb-3">
+                                Preencha os campos nas abas anteriores para gerar os comandos de provisionamento.
+                            </div>
+                            <div id="sms-preview" class="d-grid gap-2"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button class="btn btn-primary" id="save-device">Salvar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- libs -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.4/js/dataTables.bootstrap5.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- helpers + lógica -->
+    <script src="/js/notify.js"></script>
+    <script src="/js/dashboard.js"></script>
+    <script src="/js/objects-admin.js"></script>
+</body>
+
+</html>

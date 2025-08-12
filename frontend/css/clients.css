@@ -1,0 +1,38 @@
+/* Espaço pra navbar e fundo */
+body {
+  padding-top: 64px;
+  background: #f8f9fa;
+}
+
+/* Toolbar custom acima da tabela */
+#dt-toolbar { min-height: 42px; }
+#dt-left .dataTables_length,
+#dt-left .dataTables_filter {
+  margin: 0 !important;
+}
+#dt-left .dataTables_filter label,
+#dt-left .dataTables_length label {
+  margin: 0 !important;
+}
+#dt-left .dataTables_filter input {
+  width: 260px;
+}
+
+/* Card e tabela */
+.card { border: none; }
+.table-hover tbody tr:hover { background-color: rgba(0, 123, 255, 0.05); }
+
+/* Ícones decorativos à esquerda */
+#dt-left i {
+  color: var(--color-secondary);
+  cursor: default;
+}
+
+/* Quebra de linha em células longas */
+#clients-table td,
+#clients-table th {
+  white-space: normal !important;
+}
+
+/* Modal: pequenos ajustes */
+#manual-password-wrap .input-group input { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }

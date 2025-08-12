@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Recuperar Senha – Rastreamento Veicular</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <!-- Bootstrap Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet" />
+    <!-- CSS de recuperação -->
+    <link rel="stylesheet" href="css/recover.css" />
+    <!-- Favicon -->
+    <link rel="shortcut icon" href="assets/favicon.png" type="image/x-icon" />
+</head>
+
+<body>
+    <!-- Top bar -->
+    <nav class="topbar">
+        <a href="/" class="topbar-logo">
+            <img src="assets/logo.png" alt="Logo" />
+        </a>
+        <div class="topbar-links">
+            <a href="https://pyden-track.com" target="_blank">Início</a>
+            <a href="/">Login</a>
+        </div>
+    </nav>
+
+    <!-- Container global para notificações -->
+    <div id="notification-container"></div>
+
+    <!-- Vídeo de fundo -->
+    <div id="video-container">
+        <video id="bg-video" autoplay muted playsinline loop src="assets/recover.mp4" type="video/mp4"></video>
+        <div class="overlay"></div>
+    </div>
+
+    <!-- Conteúdo centralizado -->
+    <div class="recover-wrapper d-flex justify-content-center align-items-center vh-100">
+        <div class="card login-card p-4">
+            <!-- Passo 1 -->
+            <div class="step step-1 active">
+                <h4>Passo 1: Informe seu email</h4>
+                <div class="mb-3">
+                    <label for="recover-email" class="form-label">Email cadastrado</label>
+                    <input type="email" id="recover-email" class="form-control" placeholder="seu@exemplo.com" />
+                    <div id="email-error" class="error-message"></div>
+                </div>
+                <button id="btn-step1" class="btn btn-primary w-100">
+                    Enviar código
+                </button>
+            </div>
+
+            <!-- Passo 2 -->
+            <div class="step step-2">
+                <h4>Passo 2: Insira o código</h4>
+                <div class="code-inputs mb-3">
+                    <input type="text" maxlength="1" class="code-input" />
+                    <input type="text" maxlength="1" class="code-input" />
+                    <input type="text" maxlength="1" class="code-input" />
+                    <input type="text" maxlength="1" class="code-input" />
+                    <input type="text" maxlength="1" class="code-input" />
+                </div>
+                <div id="code-error" class="error-message mb-3"></div>
+                <button id="btn-step2" class="btn btn-primary w-100" disabled>
+                    Verificar código
+                </button>
+            </div>
+
+            <!-- Passo 3 -->
+            <div class="step step-3">
+                <h4>Passo 3: Defina sua nova senha</h4>
+                <div class="mb-3">
+                    <label for="new-password" class="form-label">Nova senha</label>
+                    <input type="password" id="new-password" class="form-control" />
+                </div>
+                <div class="mb-3">
+                    <label for="confirm-password" class="form-label">Confirmar senha</label>
+                    <input type="password" id="confirm-password" class="form-control" />
+                    <div id="password-error" class="error-message"></div>
+                </div>
+                <button id="btn-step3" class="btn btn-primary w-100" disabled>
+                    Atualizar senha
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/notify.js"></script>
+    <script src="js/recover.js"></script>
+</body>
+
+</html>

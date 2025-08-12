@@ -1,0 +1,246 @@
+/* === Top bar flutuante === */
+.topbar {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 800px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 0.5rem;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  z-index: 2;
+}
+
+.topbar-logo img {
+  max-height: 30px;
+  margin: 5px;
+}
+
+.topbar-links a {
+  margin-left: 1rem;
+  color: #333;
+  font-weight: 500;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+.topbar-links a:hover {
+  color: #007bff;
+}
+
+/* === Contêiner de vídeo e overlay animado === */
+#video-container {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  z-index: -2;
+}
+#video-container video {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 1s ease;
+}
+/* ativa o vídeo visível */
+#video-container video.active {
+  opacity: 1;
+}
+
+.overlay {
+  position: absolute; inset: 0;
+  background: linear-gradient(45deg, rgba(0,123,255,0.3), rgba(220,53,69,0.3));
+  background-size: 200% 200%;
+  animation: gradientMove 12s ease infinite;
+  z-index: -1;
+}
+@keyframes gradientMove {
+  0%,100% { background-position: 0% 50%; }
+  50%     { background-position: 100% 50%; }
+}
+
+/* === Wrapper do login === */
+.login-wrapper {
+  position: relative;
+  z-index: 1;
+}
+
+/* === Animação de entrada do card === */
+.login-card {
+  opacity: 0;
+  transform: translateY(30px);
+  animation: fadeInUp 0.8s ease-out forwards;
+  animation-delay: 0.3s;
+  width: 100%;
+  max-width: 360px;
+  background: rgba(255, 255, 255, 0.9);
+  border: none;
+  border-radius: 1rem;
+  padding: 2rem;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+}
+@keyframes fadeInUp {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* === Logo com efeito pulse === */
+.logo {
+  max-width: 100px;
+  margin-bottom: 1rem;
+  animation: pulse 2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,100% { transform: scale(1); }
+  50%     { transform: scale(1.05); }
+}
+
+/* === Inputs com underline animado === */
+.form-control {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid #ccc;
+  border-radius: 0;
+  transition: border-color 0.3s;
+  padding-left: 0;
+}
+.form-control:focus {
+  border-color: #007bff;
+  box-shadow: none;
+}
+
+/* === Link “Esqueci minha senha” === */
+.link-secondary {
+  font-size: 0.9rem;
+  transition: color 0.2s;
+}
+.link-secondary:hover {
+  color: #007bff;
+  text-decoration: none;
+}
+
+/* === Botão principal gradiente === */
+.btn-primary {
+  background: linear-gradient(45deg, #007bff, #6610f2);
+  border: none;
+  padding: 0.7rem;
+  font-weight: 500;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 10px rgba(0, 0, 0, 0.15);
+}
+
+/* === Ajuste geral dos botões de loja === */
+.d-flex .store-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44%;
+  padding: 0.4rem 0.8rem;
+  border-radius: 0.3rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: transform 0.2s;
+}
+.d-flex .store-btn:hover {
+  transform: translateY(-2px);
+}
+
+/* === Botão App Store (preto clássico) === */
+.store-btn.apple {
+  background: #000;
+  color: #fff;
+  border: 2px solid #333;
+}
+.store-btn.apple:hover {
+  background: #333;
+}
+.store-btn.apple .store-icon {
+  font-size: 1.3rem;
+  margin-right: 0.4rem;
+  color: #fff;
+  animation: iconGlow 3s ease-in-out infinite;
+}
+
+/* === Botão Google Play (gradient colorido) === */
+.store-btn.google {
+  background: linear-gradient(135deg, #34a853 25%, #4285f4 25%, #4285f4 50%, #fbbc05 50%, #fbbc05 75%, #ea4335 75%);
+  background-size: 300% 300%;
+  color: #fff;
+}
+.store-btn.google:hover {
+  animation: googleWave 4s ease infinite;
+}
+.store-btn.google .store-icon {
+  font-size: 1.3rem;
+  margin-right: 0.4rem;
+  color: #fff;
+  transition: transform 0.3s;
+}
+.store-btn.google:hover .store-icon {
+  transform: rotate(15deg);
+}
+
+/* === Animações específicas === */
+@keyframes iconGlow {
+  0%,100% { text-shadow: 0 0 5px #fff; }
+  50%     { text-shadow: 0 0 15px #fff; }
+}
+@keyframes googleWave {
+  0%,100% { background-position: 0% 50%; }
+  50%     { background-position: 100% 50%; }
+}
+
+/* === Container de notificações no topo === */
+#notification-container {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: auto;
+  max-width: 90%;
+  z-index: 3000;
+  pointer-events: none;
+}
+
+/* === Notificação base === */
+.notification {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  background: #fff;
+  border-radius: 0.375rem;
+  padding: 0.75rem 1rem;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  font-weight: 500;
+  pointer-events: all;
+  opacity: 0;
+  transform: translateY(-10px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+/* === Tipos e cores === */
+.notification-success { border-left: 4px solid #28a745; }
+.notification-error   { border-left: 4px solid #dc3545; }
+.notification-info    { border-left: 4px solid #17a2b8; }
+.notification-warning { border-left: 4px solid #ffc107; }
+
+/* === Ícone e texto === */
+.notification .icon {
+  font-size: 1.2rem;
+  margin-right: 0.75rem;
+}
+.notification .message {
+  flex: 1;
+}
+
+/* === Aparecer === */
+.notification.show {
+  opacity: 1;
+  transform: translateY(0);
+}
