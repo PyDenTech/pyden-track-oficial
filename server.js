@@ -3,7 +3,6 @@ require('dotenv').config();
 
 const path = require('path');
 const http = require('http');
-const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
@@ -11,8 +10,8 @@ const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
 const nodemailer = require('nodemailer');
 const net = require('net');
+const fs = require('fs');
 
-// ==== App & HTTP server ====
 const app = express();
 const server = http.createServer(app);
 
@@ -22,33 +21,21 @@ const io = new Server(server, {
     cors: { origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE'] }
 });
 
-// ==== ENV ====
-const PORT = Number(process.env.PORT || 3000);
+const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_me';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '12h';
-const DATABASE_URL = process.env.DATABASE_URL;
-const J16_PORT = Number(process.env.TCP_J16_PORT || 7002); // TK103/GT06-like (ASCII)
-const GT06_NMEA_PORT = Number(process.env.TCP_GT06_PORT || 7010); // NMEA puro/$GPRMC
 
-// ==== DB Pool (RDS com CA) ====
-let pool;
-(() => {
-    const caPath = path.join(__dirname, 'rds-ca.pem');
-    try {
-        if (!fs.existsSync(caPath)) {
-            console.error('Faltando rds-ca.pem. Baixe com:\n  curl -sSL https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -o rds-ca.pem');
-            process.exit(1);
-        }
-        const rdsCa = fs.readFileSync(caPath, 'utf8');
-        pool = new Pool({
-            connectionString: DATABASE_URL,
-            ssl: { ca: rdsCa, rejectUnauthorized: true }
-        });
-    } catch (err) {
-        console.error('Erro configurando Pool do Postgres:', err);
-        process.exit(1);
-    }
-})();
+const connStr = process.env.DATABASE_URL;
+
+// Carrega o CA do RDS (arquivo que baixamos)
+const rdsCa = fs.readFileSync(path.join(__dirname, 'rds-ca.pem')).toString();
+
+const pool = new Pool({
+    connectionString: connStr,
+    ssl: {
+        ca: rdsCa,
+        rejectUnauthorized: false, // valida a cadeia usando o CA correto
+    },
+});
 
 // ==== Middlewares ====
 app.use(cors());
@@ -71,7 +58,7 @@ function genCode5() { return String(Math.floor(Math.random() * 100000)).padStart
 async function sendCodeByEmail(to, code) {
     const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
     const minutes = Number(process.env.RESET_CODE_MINUTES || 15);
-    const html = `
+    const html = /* html */`
   <div style="background-color:#f4f6f8;padding:40px 0;font-family:Arial,Helvetica,sans-serif;color:#333;">
     <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.1);overflow:hidden">
       <div style="background-color:#2563eb;padding:16px;text-align:center;color:#fff;">
@@ -115,25 +102,11 @@ function requireAuth(req, res, next) {
     const h = req.headers.authorization || '';
     const t = h.startsWith('Bearer ') ? h.slice(7) : null;
     if (!t) return res.status(401).json({ error: 'Unauthorized' });
-    try { req.user = jwt.verify(t, JWT_SECRET); next(); }
-    catch { return res.status(401).json({ error: 'Unauthorized' }); }
+    try { req.user = jwt.verify(t, JWT_SECRET); next(); } catch { return res.status(401).json({ error: 'Unauthorized' }); }
 }
-const isAdmin = (req) => {
-    const r = (req.user?.role || '').toUpperCase();
-    return r === 'ADMIN' || r === 'MASTER';
-};
+const isAdmin = (req) => (req.user?.role || '').toUpperCase() === 'ADMIN';
 
-// ========= HEALTH =========
-app.get('/healthz', async (_req, res) => {
-    try {
-        const { rows } = await pool.query('SELECT 1 as ok');
-        res.json({ ok: rows?.[0]?.ok === 1 });
-    } catch (e) {
-        res.status(500).json({ ok: false, error: e.message });
-    }
-});
-
-// ========= AUTH =========
+// ==== AUTH ====
 // login
 app.post('/api/auth/login', async (req, res) => {
     try {
@@ -154,7 +127,7 @@ app.post('/api/auth/login', async (req, res) => {
         const token = jwt.sign(
             { sub: u.id, email: u.email, name: u.name, role: u.role || 'USER' },
             JWT_SECRET,
-            { expiresIn: JWT_EXPIRES_IN }
+            { expiresIn: process.env.JWT_EXPIRES_IN || '12h' }
         );
         res.json({ token });
     } catch (err) {
@@ -236,7 +209,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
     }
 });
 
-// opcional: perfil
+// opcional
 app.get('/api/auth/me', requireAuth, async (req, res) => {
     try {
         const q = await pool.query(
@@ -248,7 +221,9 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
 });
 
-// ========= Dashboard READ =========
+
+// ======== DASHBOARD ENDPOINTS (READ) ========
+
 app.get('/api/device-groups', requireAuth, async (_req, res) => {
     try {
         const { rows } = await pool.query(`
@@ -302,7 +277,9 @@ app.get('/api/positions', requireAuth, async (req, res) => {
     } catch (err) { console.error(err); res.status(500).json({ error: 'Erro ao listar posições.' }); }
 });
 
-// ========= CRUD Dispositivos =========
+
+// ======== CRUD DE DISPOSITIVOS ========
+
 function validateDevicePayload(b) {
     const errors = [];
     if (!b || !b.name) errors.push('Nome é obrigatório');
@@ -317,7 +294,7 @@ function validateDevicePayload(b) {
 
 app.post('/api/devices', requireAuth, async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Somente ADMIN/MASTER' });
+        if (!isAdmin(req)) return res.status(403).json({ error: 'Somente ADMIN' });
         validateDevicePayload(req.body);
         const b = req.body;
 
@@ -348,7 +325,7 @@ app.post('/api/devices', requireAuth, async (req, res) => {
 
 app.put('/api/devices/:id', requireAuth, async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Somente ADMIN/MASTER' });
+        if (!isAdmin(req)) return res.status(403).json({ error: 'Somente ADMIN' });
         const id = Number(req.params.id);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'ID inválido' });
         validateDevicePayload(req.body);
@@ -379,7 +356,7 @@ app.put('/api/devices/:id', requireAuth, async (req, res) => {
 
 app.delete('/api/devices/:id', requireAuth, async (req, res) => {
     try {
-        if (!isAdmin(req)) return res.status(403).json({ error: 'Somente ADMIN/MASTER' });
+        if (!isAdmin(req)) return res.status(403).json({ error: 'Somente ADMIN' });
         const id = Number(req.params.id);
         if (!Number.isFinite(id)) return res.status(400).json({ error: 'ID inválido' });
         const r = await pool.query(`DELETE FROM devices WHERE id=$1`, [id]);
@@ -391,20 +368,37 @@ app.delete('/api/devices/:id', requireAuth, async (req, res) => {
     }
 });
 
-// ========= STATIC =========
+
+// ======== STATIC ========
 const publicPath = path.join(__dirname, 'public');
 app.use(express.static(publicPath));
 app.use('/dashboard', express.static(path.join(publicPath, 'dashboard')));
 
+// Páginas
 app.get('/', (_req, res) => res.sendFile(path.join(publicPath, 'index.html')));
 app.get('/recover', (_req, res) => res.sendFile(path.join(publicPath, 'recover.html')));
 
-// ========= TRACKING HELPERS =========
+// ==== Error handler ====
+app.use((err, _req, res, _next) => {
+    console.error('Unhandled error:', err);
+    res.status(500).json({ error: 'Erro interno.' });
+});
+
+
+// ===================================================================
+// ========================  TRACKING LISTENERS  =====================
+// ===================================================================
+
+/**
+ * Salva posição + atualiza "devices.last_*" e emite socket.
+ */
 async function savePositionByImei(imei, pos) {
+    // procura device
     const dres = await pool.query(`SELECT id FROM devices WHERE imei=$1 LIMIT 1`, [String(imei)]);
     if (!dres.rowCount) return false;
     const deviceId = dres.rows[0].id;
 
+    // insere positions
     const p = {
         device_id: deviceId,
         fix_time: pos.fix_time || new Date(),
@@ -424,6 +418,7 @@ async function savePositionByImei(imei, pos) {
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
   `, [p.device_id, p.fix_time, p.lat, p.lng, p.speed_kmh, p.course_deg, p.altitude_m, p.satellites, p.hdop, p.ignition, p.battery_v, p.raw_payload]);
 
+    // atualiza devices
     await pool.query(`
     UPDATE devices SET
       last_seen=now(),
@@ -433,6 +428,7 @@ async function savePositionByImei(imei, pos) {
     WHERE id=$6
   `, [p.lat, p.lng, p.speed_kmh, p.course_deg, p.fix_time, deviceId]);
 
+    // emite realtime
     io.emit('device:update', {
         id: deviceId,
         last_lat: p.lat, last_lng: p.lng,
@@ -445,32 +441,40 @@ async function savePositionByImei(imei, pos) {
     return true;
 }
 
-// ========= Parsers =========
-// TK103-like: "imei:123...,tracker,...,lat,lng,speed?"
+// ---- Parsers básicos (ASCII) ----
+
+// TK103-like: "imei:123456789012345,tracker,123456789,GPRMC,...,lat,lon,..." (varia MUITO)
+// Aqui pegamos o padrão comum: imei:<imei>,<type>,... ,latitude,longitude, velocidade(km/h) opcional
 function tryParseTK103(line) {
     if (!/^imei:\d+/.test(line)) return null;
     const imei = (line.match(/^imei:(\d{10,20})/) || [])[1];
+    // latitude/longitude no final: ",<lat>,<lng>,"
     const parts = line.split(',');
+    // tenta achar lat/lon (alguns enviam ... , F, lat, lon, speed, course)
     let lat = null, lng = null, speed = null;
     for (let i = 0; i < parts.length - 1; i++) {
         const a = parseFloat(parts[i]), b = parseFloat(parts[i + 1]);
         if (isFinite(a) && isFinite(b) && Math.abs(a) <= 90 && Math.abs(b) <= 180) {
             lat = a; lng = b;
+            // speed: próximo campo se existir (km/h)
             const sp = parseFloat(parts[i + 2]);
             if (isFinite(sp)) speed = sp;
             break;
         }
     }
-    if (imei && lat != null && lng != null) return { imei, lat, lng, speed_kmh: speed || 0 };
-    return { imei };
+    if (imei && lat != null && lng != null) {
+        return { imei, lat, lng, speed_kmh: speed || 0 };
+    }
+    return { imei }; // ao menos volta o IMEI
 }
 
-// $GPRMC
+// NMEA $GPRMC,hhmmss,A,lat,NS,lon,EW,speed(kn),course,date,...
 function tryParseNmeaRmc(line) {
     if (!/^\$GPRMC,/.test(line)) return null;
     const p = line.trim().split(',');
     if (p.length < 12) return null;
-    if (p[2] !== 'A') return null;
+    const status = p[2]; // A=ativo, V=void
+    if (status !== 'A') return null;
     const latRaw = p[3], latHem = p[4];
     const lonRaw = p[5], lonHem = p[6];
     const spKn = parseFloat(p[7] || '0');
@@ -478,6 +482,7 @@ function tryParseNmeaRmc(line) {
     const dateStr = p[9]; const timeStr = p[1];
 
     function dmToDeg(dm) {
+        // ddmm.mmmm -> dd + mm/60
         const v = parseFloat(dm);
         const deg = Math.floor(v / 100);
         const min = v - deg * 100;
@@ -488,6 +493,7 @@ function tryParseNmeaRmc(line) {
     if (latHem === 'S') lat = -lat;
     if (lonHem === 'W') lon = -lon;
 
+    // gera Date (UTC)
     let fix_time = new Date();
     if (/^\d{6}$/.test(dateStr) && /^\d{6}(\.\d+)?$/.test(timeStr)) {
         const dd = dateStr.slice(0, 2), mm = dateStr.slice(2, 4), yy = dateStr.slice(4, 6);
@@ -500,7 +506,10 @@ function tryParseNmeaRmc(line) {
     return { lat, lng: lon, speed_kmh: (spKn || 0) * 1.852, course_deg: course || 0, fix_time };
 }
 
-// ========= TCP servers =========
+// ---- Servidores TCP ----
+const PORT_GT06 = Number(process.env.LISTEN_GT06 || 7002);   // TK103/GT06 ASCII-like
+const PORT_NMEA = Number(process.env.LISTEN_NMEA || 7010);   // NMEA (quando disponível)
+
 function startTcpServer(port, onLine) {
     const srv = net.createServer((socket) => {
         socket.setEncoding('utf8');
@@ -516,10 +525,12 @@ function startTcpServer(port, onLine) {
     return srv;
 }
 
-// GT06/TK103 ASCII-ish (porta J16/TK103)
-startTcpServer(J16_PORT, async (line, socket) => {
+// GT06/TK103 ASCII-ish
+startTcpServer(PORT_GT06, async (line, socket) => {
+    // alguns modelos pedem ACK “ON” para login/sinal de vida:
     if (line.startsWith('##')) { socket.write('LOAD'); return; }
 
+    // tenta TK103-like
     let parsed = tryParseTK103(line);
     if (parsed?.imei && parsed.lat != null) {
         await savePositionByImei(parsed.imei, {
@@ -530,6 +541,7 @@ startTcpServer(J16_PORT, async (line, socket) => {
         return;
     }
 
+    // tenta NMEA RMC embutido (alguns enviam "...,$GPRMC,...")
     const rmcIdx = line.indexOf('$GPRMC,');
     if (parsed?.imei && rmcIdx >= 0) {
         const rmc = tryParseNmeaRmc(line.slice(rmcIdx));
@@ -539,13 +551,15 @@ startTcpServer(J16_PORT, async (line, socket) => {
         }
     }
 
+    // se não reconheceu mas tinha IMEI, ao menos mantém online
     if (parsed?.imei) {
         await savePositionByImei(parsed.imei, { lat: 0, lng: 0, speed_kmh: 0, raw_payload: Buffer.from(line) });
     }
 });
 
-// NMEA puro ($GPRMC...), porta GT06/NMEA
-startTcpServer(GT06_NMEA_PORT, (() => {
+// NMEA puro ($GPRMC...). Aqui precisamos do IMEI antes (alguns enviam numa primeira linha)
+// Estratégia simples: se a conexão mandar "IMEI:xxxxxxxxxxxxxxx" antes do NMEA, guardamos.
+startTcpServer(PORT_NMEA, (() => {
     const lastImeiBySocket = new WeakMap();
     return async (line, socket) => {
         const mImei = line.match(/^IMEI[:=](\d{10,20})$/i);
@@ -554,12 +568,12 @@ startTcpServer(GT06_NMEA_PORT, (() => {
         const rmc = tryParseNmeaRmc(line);
         if (!rmc) return;
         const imei = lastImeiBySocket.get(socket);
-        if (!imei) return;
+        if (!imei) return; // precisamos do IMEI previamente
         await savePositionByImei(imei, { ...rmc, raw_payload: Buffer.from(line) });
     };
 })());
 
-// OFFLINE cron
+// Sinaliza OFFLINE se não recebe nada há X minutos (cron simples)
 const OFFLINE_MINUTES = Number(process.env.OFFLINE_MINUTES || 10);
 setInterval(async () => {
     try {
@@ -572,11 +586,19 @@ setInterval(async () => {
     } catch (e) { console.warn('offline cron', e.message); }
 }, 60_000);
 
-// Socket.IO auth (opcional)
-io.use((socket, next) => { next(); });
-io.on('connection', (socket) => {
-    socket.on('disconnect', () => { });
+
+// ==== Socket.IO auth opcional (somente log) ====
+io.use((socket, next) => {
+    // você pode validar o token aqui se quiser bloquear
+    // const token = socket.handshake.auth?.token;
+    next();
 });
 
-// Start
+io.on('connection', (socket) => {
+    // console.log('socket connected', socket.id);
+    socket.on('disconnect', () => { /* noop */ });
+});
+
+
+// ==== Start ====
 server.listen(PORT, () => console.log(`🚀 Web server on http://localhost:${PORT}`));
