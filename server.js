@@ -24,12 +24,16 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_me';
 
-// ==== DB ====
+const connStr = process.env.DATABASE_URL;
+
+// Carrega o CA do RDS (arquivo que baixamos)
+const rdsCa = fs.readFileSync(path.join(__dirname, 'rds-ca.pem')).toString();
+
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: connStr,
     ssl: {
-        ca: fs.readFileSync(require('path').join(__dirname, 'rds-ca.pem')).toString(),
-        rejectUnauthorized: true, // valida o certificado usando o CA correto
+        ca: rdsCa,
+        rejectUnauthorized: true, // valida a cadeia usando o CA correto
     },
 });
 
