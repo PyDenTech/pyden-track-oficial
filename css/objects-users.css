@@ -1,0 +1,14 @@
+/* objects-users.css */
+.control-icons i { cursor: pointer; color:#6c757d; }
+.control-icons i:hover { color:#0b5ed7; }
+
+.device-pop .leaflet-popup-content { padding: 10px 12px; }
+.map-actions {
+  display:flex; gap:.5rem; flex-wrap: wrap;
+}
+.map-actions .btn {
+  display:flex; align-items:center; gap:.4rem;
+  border:1px solid var(--color-border,#e0e0e0);
+  background:#fff; padding:.25rem .5rem;
+}
+.map-actions .btn:hover { background:#f8f9fa; }
