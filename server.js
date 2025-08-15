@@ -10,7 +10,6 @@ const jwt = require('jsonwebtoken');
 const { Pool } = require('pg');
 const nodemailer = require('nodemailer');
 const net = require('net');
-const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
@@ -24,18 +23,18 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_me';
 
-const connStr = process.env.DATABASE_URL;
-
-// Carrega o CA do RDS (arquivo que baixamos)
-const rdsCa = fs.readFileSync(path.join(__dirname, 'rds-ca.pem')).toString();
-
-const pool = new Pool({
-    connectionString: connStr,
-    ssl: {
-        ca: rdsCa,
-        rejectUnauthorized: false, // valida a cadeia usando o CA correto
-    },
-});
+// ==== DB ====
+const pool = new Pool(
+    process.env.DATABASE_URL
+        ? { connectionString: process.env.DATABASE_URL, ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: false } : false }
+        : {
+            host: process.env.PGHOST || 'localhost',
+            user: process.env.PGUSER || 'postgres',
+            password: process.env.PGPASSWORD || 'postgres',
+            database: process.env.PGDATABASE || 'pyden',
+            port: Number(process.env.PGPORT || 5432),
+        }
+);
 
 // ==== Middlewares ====
 app.use(cors());
