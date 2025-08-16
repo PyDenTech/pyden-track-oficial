@@ -91,7 +91,6 @@ function requireAuth(req, res, next) {
 const isAdmin = (req) => (req.user?.role || '').toUpperCase() === 'ADMIN';
 
 // ==== AUTH ====
-// login
 app.post('/api/auth/login', async (req, res) => {
     try {
         const { email, password } = req.body || {};
@@ -120,7 +119,6 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-// check-email
 app.post('/api/auth/check-email', async (req, res) => {
     try {
         const { email } = req.body || {};
@@ -144,7 +142,6 @@ app.post('/api/auth/check-email', async (req, res) => {
     }
 });
 
-// verify-code
 app.post('/api/auth/verify-code', async (req, res) => {
     try {
         const { email, code } = req.body || {};
@@ -166,7 +163,6 @@ app.post('/api/auth/verify-code', async (req, res) => {
     }
 });
 
-// reset-password
 app.post('/api/auth/reset-password', async (req, res) => {
     try {
         const { email, password } = req.body || {};
@@ -193,7 +189,6 @@ app.post('/api/auth/reset-password', async (req, res) => {
     }
 });
 
-// opcional
 app.get('/api/auth/me', requireAuth, async (req, res) => {
     try {
         const q = await pool.query(
@@ -256,7 +251,10 @@ app.get('/api/positions', requireAuth, async (req, res) => {
 
         const { rows } = await pool.query(sql, vals);
         res.json(rows);
-    } catch (err) { console.error(err); res.status(500).json({ error: 'Erro ao listar posições.' }); }
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Erro ao listar posições.' });
+    }
 });
 
 // ======== CRUD DE DISPOSITIVOS ========
@@ -488,124 +486,152 @@ function tryParseNmeaRmc(line) {
 const PORT_GT06 = Number(process.env.LISTEN_GT06 || 7002);   // GT06 binário e TK103-like ASCII no mesmo porto
 const PORT_NMEA = Number(process.env.LISTEN_NMEA || 7010);   // NMEA puro (quando disponível)
 
-function findGt06Header(buf, from = 0) {
-    for (let i = from; i < buf.length - 1; i++) {
-        const a = buf[i], b = buf[i + 1];
-        if ((a === 0x78 && b === 0x78) || (a === 0x79 && b === 0x79)) return i;
-    }
-    return -1;
-}
+// Debug opcional
+const DBG = process.env.DEBUG_GT06 === '1';
+const dlog = (...a) => { if (DBG) console.log('[GT06]', ...a); };
 
+// Converte IMEI em BCD (8 bytes -> 15 dígitos)
 function bcdToImei(b) {
     let s = '';
     for (const byte of b) {
         const hi = (byte >> 4) & 0x0f;
         const lo = byte & 0x0f;
-        s += hi.toString(10);
-        s += lo.toString(10);
+        s += hi.toString(10) + lo.toString(10);
     }
-    // IMEI tem 15 dígitos; descartamos um nibble de padding
-    if (s.length >= 16) s = s.slice(1, 16);
-    return s.replace(/^0+/, (m) => m.length > 0 ? '0' : ''); // preserva zero inicial se houver
+    if (s.length >= 16) s = s.slice(1, 16); // descarta nibble de padding
+    return s;
 }
 
-function parseGt06AndHandle(frame, state, socket) {
-    // frame = [0x78 0x78] len proto ... serial(2) crc(2) 0x0D 0x0A
-    if (frame.length < 12) return;
-    const len = frame[2];
-    const proto = frame[3];
-    const dataLen = len - 5; // dados sem serial+crc
-    const dataStart = 4;
-    const dataEnd = dataStart + Math.max(0, dataLen);
-    const data = frame.subarray(dataStart, dataEnd);
-    const serial = frame.subarray(dataEnd, dataEnd + 2);
+// Extrai frames completos GT06 pelo campo de comprimento (robusto)
+function extractGt06Frames(buf) {
+    const out = [];
+    let i = 0;
+    while (i + 5 <= buf.length) {
+        const h1 = buf[i], h2 = buf[i + 1];
+        const is78 = (h1 === 0x78 && h2 === 0x78);
+        const is79 = (h1 === 0x79 && h2 === 0x79);
+        if (!(is78 || is79)) { i++; continue; }
+
+        let len, hdr, need;
+        if (is78) {
+            if (i + 3 > buf.length) break;
+            len = buf[i + 2];                // 1 byte
+            hdr = 3;                         // 0:78 1:78 2:len
+            need = hdr + len + 2 /*CRC*/ + 2 /*0D0A*/;
+        } else {
+            if (i + 4 > buf.length) break;
+            len = buf.readUInt16BE(i + 2);   // 2 bytes
+            hdr = 4;                         // 0:79 1:79 2:lenHi 3:lenLo
+            need = hdr + len + 2 /*CRC*/ + 2 /*0D0A*/;
+        }
+
+        if (i + need > buf.length) break;
+        out.push(buf.subarray(i, i + need));
+        i += need;
+    }
+    return { frames: out, rest: buf.subarray(i) };
+}
+
+async function handleGt06Frame(frame, state) {
+    const h1 = frame[0], h2 = frame[1];
+    const is78 = (h1 === 0x78 && h2 === 0x78);
+    let len, hdr;
+    if (is78) { len = frame[2]; hdr = 3; } else { len = frame.readUInt16BE(2); hdr = 4; }
+
+    const proto = frame[hdr];
+    const contentEnd = hdr + 1 + (len - 3);            // len inclui: protocol + information + serial(2)
+    const data = frame.subarray(hdr + 1, contentEnd);  // apenas "information content"
+    // const serial = frame.subarray(contentEnd, contentEnd + 2); // se quiser ACK
 
     if (proto === 0x01) { // LOGIN
         if (data.length >= 8) {
             const imei = bcdToImei(data.subarray(0, 8));
             if (imei) {
                 state.lastImei = imei;
-                markOnlineByImei(imei).catch(() => { });
+                dlog('LOGIN', imei);
+                await markOnlineByImei(imei);
             }
         }
-        // *Opcional*: enviar ACK de login (omito para tolerância a variantes de CRC)
         return;
     }
 
     if (proto === 0x13) { // HEARTBEAT
-        if (state.lastImei) markOnlineByImei(state.lastImei).catch(() => { });
+        if (state.lastImei) {
+            dlog('HB', state.lastImei);
+            await markOnlineByImei(state.lastImei);
+        }
         return;
     }
 
     if (proto === 0x10 || proto === 0x12) { // POSITION
         if (!state.lastImei) return;
-        // Estrutura típica: YY MM DD hh mm ss, gpsInfo, lat(4), lon(4), speed(1), course(2)...
-        if (data.length >= 17) {
+        // YY MM DD hh mm ss, gpsInfo, lat(4), lon(4), speed(1), course(2), ...
+        if (data.length >= 18) {
             const yy = 2000 + data[0], mo = data[1], dd = data[2], hh = data[3], mi = data[4], ss = data[5];
             const fix_time = new Date(Date.UTC(yy, mo - 1, dd, hh, mi, ss));
+            const gpsInfo = data[6];
             const latRaw = data.readUInt32BE(7);
             const lonRaw = data.readUInt32BE(11);
-            const speed = data[15]; // 1 byte
+            const speed = data[15];
             const courseRaw = data.readUInt16BE(16);
 
-            let lat = latRaw / 1800000; // graus
-            let lng = lonRaw / 1800000; // graus
+            let lat = latRaw / 1800000;
+            let lng = lonRaw / 1800000;
             const isSouth = (courseRaw & 0x0800) !== 0;
             const isWest = (courseRaw & 0x1000) !== 0;
             if (isSouth) lat = -lat;
             if (isWest) lng = -lng;
             const course = courseRaw & 0x03FF;
 
-            // Sanidade: coordenadas válidas
+            const gpsOk = (gpsInfo & 0x20) !== 0; // muitos firmwares: bit de fix
             const okLat = Number.isFinite(lat) && Math.abs(lat) <= 90;
             const okLng = Number.isFinite(lng) && Math.abs(lng) <= 180;
 
-            if (okLat && okLng) {
-                savePositionByImei(state.lastImei, {
+            dlog('POS', state.lastImei, gpsOk ? 'FIX' : 'NOFIX', lat.toFixed(6), lng.toFixed(6), 'spd', speed, 'crs', course);
+
+            // Salva quando coordenadas são válidas e (tem fix ou não são zeros)
+            if (okLat && okLng && (gpsOk || (lat !== 0 || lng !== 0))) {
+                await savePositionByImei(state.lastImei, {
                     lat, lng,
                     speed_kmh: speed ?? null,
                     course_deg: course ?? null,
                     fix_time,
                     raw_payload: frame
-                }).catch(() => { });
+                });
                 return;
             }
         }
-        // Se não conseguir decodificar, ao menos manter online:
-        markOnlineByImei(state.lastImei).catch(() => { });
+        // Sem posição válida → manter online
+        await markOnlineByImei(state.lastImei);
         return;
     }
 
-    // Qualquer outro protocolo: manter sessão viva
-    if (state.lastImei) markOnlineByImei(state.lastImei).catch(() => { });
+    // Outros protocolos → manter sessão viva
+    if (state.lastImei) await markOnlineByImei(state.lastImei);
 }
 
 function startGt06MixedServer(port) {
     const srv = net.createServer((socket) => {
-        // NÃO definir encoding: precisamos de Buffer para binário
+        // NÃO usar setEncoding aqui (precisamos de Buffer bruto)
         let binBuf = Buffer.alloc(0);
         let asciiBuf = '';
         const state = { lastImei: null };
 
         socket.on('data', async (chunk) => {
             if (!Buffer.isBuffer(chunk)) chunk = Buffer.from(chunk, 'binary');
-            // ---- 1) Binário GT06 (0x78/0x79 .... 0D0A) ----
+
+            // 1) Frames binários GT06 (podem vir encadeados)
             binBuf = Buffer.concat([binBuf, chunk]);
             while (true) {
-                let start = findGt06Header(binBuf);
-                if (start < 0) break;
-                // procurar marcador de fim 0D0A depois do header
-                const end = binBuf.indexOf(0x0A, start + 5); // \n
-                if (end < 0 || binBuf[end - 1] !== 0x0D) break;
-                const frame = binBuf.subarray(start, end + 1);
-                // cortar até o fim desse frame
-                const rest = binBuf.subarray(end + 1);
+                const { frames, rest } = extractGt06Frames(binBuf);
+                if (!frames.length) break;
+                for (const fr of frames) {
+                    try { await handleGt06Frame(fr, state); } catch { }
+                }
                 binBuf = rest;
-                // processar
-                try { parseGt06AndHandle(frame, state, socket); } catch (e) { /* tolerante */ }
             }
 
-            // ---- 2) ASCII (TK103-like / NMEA / clones) ----
+            // 2) Linhas ASCII (TK103-like / NMEA) no mesmo socket – tolerante
             asciiBuf += chunk.toString('utf8');
             let nl;
             while ((nl = asciiBuf.indexOf('\n')) >= 0) {
@@ -613,20 +639,17 @@ function startGt06MixedServer(port) {
                 asciiBuf = asciiBuf.slice(nl + 1);
                 if (!line) continue;
 
-                // Sinal de vida TK103
+                // TK103 keep-alive
                 if (line.startsWith('##')) { try { socket.write('LOAD'); } catch { } continue; }
 
                 // TK103-like
                 const tk = tryParseTK103(line);
                 if (tk?.imei && tk.lat != null) {
-                    await savePositionByImei(tk.imei, {
-                        lat: tk.lat, lng: tk.lng, speed_kmh: tk.speed_kmh ?? 0, raw_payload: Buffer.from(line)
-                    }).catch(() => { });
+                    await savePositionByImei(tk.imei, { lat: tk.lat, lng: tk.lng, speed_kmh: tk.speed_kmh ?? 0, raw_payload: Buffer.from(line) }).catch(() => { });
                     state.lastImei = tk.imei;
                     continue;
                 }
                 if (tk?.imei && tk.lat == null) {
-                    // Sem posição, apenas manter online
                     await markOnlineByImei(tk.imei).catch(() => { });
                     state.lastImei = tk.imei;
                 }
@@ -650,7 +673,7 @@ function startGt06MixedServer(port) {
     return srv;
 }
 
-// NMEA puro ($GPRMC...). Aqui precisamos do IMEI antes (alguns enviam numa primeira linha)
+// NMEA puro ($GPRMC...) – IMEI deve vir em linha anterior "IMEI:XXXXXXXXXXXXXXX"
 function startNmeaServer(port) {
     const lastImeiBySocket = new WeakMap();
     const srv = net.createServer((socket) => {
