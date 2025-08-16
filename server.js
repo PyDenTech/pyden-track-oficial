@@ -26,9 +26,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_me';
 // ==== DB ====
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: {
-        rejectUnauthorized: false,
-    },
+    ssl: { rejectUnauthorized: false },
 });
 
 // ==== Middlewares ====
@@ -61,24 +59,16 @@ async function sendCodeByEmail(to, code) {
       </div>
       <div style="padding:24px;">
         <h2 style="margin-top:0;font-size:18px;color:#111827;">Recuperação de senha</h2>
-        <p style="margin:8px 0;font-size:15px;line-height:1.5;">
-          Olá,<br>Use o código abaixo para continuar. Ele é válido por <strong>${minutes}</strong> minutos.
-        </p>
+        <p style="margin:8px 0;font-size:15px;line-height:1.5;">Olá,<br>Use o código abaixo para continuar. Ele é válido por <strong>${minutes}</strong> minutos.</p>
         <div style="background-color:#f3f4f6;border:2px dashed #2563eb;border-radius:6px;padding:16px;margin:20px 0;text-align:center;">
-          <span style="display:inline-block;font-size:32px;font-weight:bold;letter-spacing:8px;color:#2563eb;">
-            ${code}
-          </span>
+          <span style="display:inline-block;font-size:32px;font-weight:bold;letter-spacing:8px;color:#2563eb;">${code}</span>
         </div>
         <p style="margin:8px 0;font-size:14px;color:#6b7280;">Se você não fez esta solicitação, ignore este e-mail.</p>
         <div style="text-align:center;margin-top:24px;">
-          <a href="${baseUrl}" target="_blank" style="display:inline-block;padding:12px 24px;background-color:#2563eb;color:#fff;text-decoration:none;border-radius:4px;font-size:15px;">
-            Acessar PyDen Track
-          </a>
+          <a href="${baseUrl}" target="_blank" style="display:inline-block;padding:12px 24px;background-color:#2563eb;color:#fff;text-decoration:none;border-radius:4px;font-size:15px;">Acessar PyDen Track</a>
         </div>
       </div>
-      <div style="background-color:#f9fafb;padding:12px;text-align:center;font-size:12px;color:#9ca3af;">
-        © ${new Date().getFullYear()} PyDen Track. Todos os direitos reservados.
-      </div>
+      <div style="background-color:#f9fafb;padding:12px;text-align:center;font-size:12px;color:#9ca3af;">© ${new Date().getFullYear()} PyDen Track. Todos os direitos reservados.</div>
     </div>
   </div>`;
     const text = `Recuperação de senha - PyDen Track
@@ -109,7 +99,7 @@ app.post('/api/auth/login', async (req, res) => {
 
         const r = await pool.query(
             `SELECT id, COALESCE(full_name, name) AS name, email, password, role, active
-         FROM users WHERE lower(email) = lower($1) LIMIT 1`, [email]
+       FROM users WHERE lower(email) = lower($1) LIMIT 1`, [email]
         );
         if (!r.rowCount) return res.status(401).json({ error: 'Credenciais inválidas' });
         const u = r.rows[0];
@@ -215,9 +205,7 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Erro interno.' }); }
 });
 
-
 // ======== DASHBOARD ENDPOINTS (READ) ========
-
 app.get('/api/device-groups', requireAuth, async (_req, res) => {
     try {
         const { rows } = await pool.query(`
@@ -271,9 +259,7 @@ app.get('/api/positions', requireAuth, async (req, res) => {
     } catch (err) { console.error(err); res.status(500).json({ error: 'Erro ao listar posições.' }); }
 });
 
-
 // ======== CRUD DE DISPOSITIVOS ========
-
 function validateDevicePayload(b) {
     const errors = [];
     if (!b || !b.name) errors.push('Nome é obrigatório');
@@ -362,7 +348,6 @@ app.delete('/api/devices/:id', requireAuth, async (req, res) => {
     }
 });
 
-
 // ======== STATIC ========
 const publicPath = path.join(__dirname, 'public');
 app.use(express.static(publicPath));
@@ -378,21 +363,32 @@ app.use((err, _req, res, _next) => {
     res.status(500).json({ error: 'Erro interno.' });
 });
 
-
 // ===================================================================
 // ========================  TRACKING LISTENERS  =====================
 // ===================================================================
 
-/**
- * Salva posição + atualiza "devices.last_*" e emite socket.
- */
-async function savePositionByImei(imei, pos) {
-    // procura device
+/** Marca ONLINE sem inserir posição (login/heartbeat binário). */
+async function markOnlineByImei(imei) {
     const dres = await pool.query(`SELECT id FROM devices WHERE imei=$1 LIMIT 1`, [String(imei)]);
     if (!dres.rowCount) return false;
     const deviceId = dres.rows[0].id;
 
-    // insere positions
+    await pool.query(`
+    UPDATE devices
+       SET last_seen=now(), status='ONLINE', updated_at=now()
+     WHERE id=$1
+  `, [deviceId]);
+
+    io.emit('device:update', { id: deviceId, status: 'ONLINE' });
+    return true;
+}
+
+/** Salva posição + atualiza "devices.last_*" e emite socket. */
+async function savePositionByImei(imei, pos) {
+    const dres = await pool.query(`SELECT id FROM devices WHERE imei=$1 LIMIT 1`, [String(imei)]);
+    if (!dres.rowCount) return false;
+    const deviceId = dres.rows[0].id;
+
     const p = {
         device_id: deviceId,
         fix_time: pos.fix_time || new Date(),
@@ -412,7 +408,6 @@ async function savePositionByImei(imei, pos) {
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
   `, [p.device_id, p.fix_time, p.lat, p.lng, p.speed_kmh, p.course_deg, p.altitude_m, p.satellites, p.hdop, p.ignition, p.battery_v, p.raw_payload]);
 
-    // atualiza devices
     await pool.query(`
     UPDATE devices SET
       last_seen=now(),
@@ -422,7 +417,6 @@ async function savePositionByImei(imei, pos) {
     WHERE id=$6
   `, [p.lat, p.lng, p.speed_kmh, p.course_deg, p.fix_time, deviceId]);
 
-    // emite realtime
     io.emit('device:update', {
         id: deviceId,
         last_lat: p.lat, last_lng: p.lng,
@@ -435,22 +429,16 @@ async function savePositionByImei(imei, pos) {
     return true;
 }
 
-// ---- Parsers básicos (ASCII) ----
-
-// TK103-like: "imei:123456789012345,tracker,123456789,GPRMC,...,lat,lon,..." (varia MUITO)
-// Aqui pegamos o padrão comum: imei:<imei>,<type>,... ,latitude,longitude, velocidade(km/h) opcional
+// ---- Parsers ASCII (TK103-like / NMEA) ----
 function tryParseTK103(line) {
     if (!/^imei:\d+/.test(line)) return null;
     const imei = (line.match(/^imei:(\d{10,20})/) || [])[1];
-    // latitude/longitude no final: ",<lat>,<lng>,"
     const parts = line.split(',');
-    // tenta achar lat/lon (alguns enviam ... , F, lat, lon, speed, course)
     let lat = null, lng = null, speed = null;
     for (let i = 0; i < parts.length - 1; i++) {
         const a = parseFloat(parts[i]), b = parseFloat(parts[i + 1]);
         if (isFinite(a) && isFinite(b) && Math.abs(a) <= 90 && Math.abs(b) <= 180) {
             lat = a; lng = b;
-            // speed: próximo campo se existir (km/h)
             const sp = parseFloat(parts[i + 2]);
             if (isFinite(sp)) speed = sp;
             break;
@@ -459,15 +447,14 @@ function tryParseTK103(line) {
     if (imei && lat != null && lng != null) {
         return { imei, lat, lng, speed_kmh: speed || 0 };
     }
-    return { imei }; // ao menos volta o IMEI
+    return { imei };
 }
 
-// NMEA $GPRMC,hhmmss,A,lat,NS,lon,EW,speed(kn),course,date,...
 function tryParseNmeaRmc(line) {
     if (!/^\$GPRMC,/.test(line)) return null;
     const p = line.trim().split(',');
     if (p.length < 12) return null;
-    const status = p[2]; // A=ativo, V=void
+    const status = p[2];
     if (status !== 'A') return null;
     const latRaw = p[3], latHem = p[4];
     const lonRaw = p[5], lonHem = p[6];
@@ -476,7 +463,6 @@ function tryParseNmeaRmc(line) {
     const dateStr = p[9]; const timeStr = p[1];
 
     function dmToDeg(dm) {
-        // ddmm.mmmm -> dd + mm/60
         const v = parseFloat(dm);
         const deg = Math.floor(v / 100);
         const min = v - deg * 100;
@@ -487,7 +473,6 @@ function tryParseNmeaRmc(line) {
     if (latHem === 'S') lat = -lat;
     if (lonHem === 'W') lon = -lon;
 
-    // gera Date (UTC)
     let fix_time = new Date();
     if (/^\d{6}$/.test(dateStr) && /^\d{6}(\.\d+)?$/.test(timeStr)) {
         const dd = dateStr.slice(0, 2), mm = dateStr.slice(2, 4), yy = dateStr.slice(4, 6);
@@ -496,76 +481,201 @@ function tryParseNmeaRmc(line) {
         const d = new Date(iso);
         if (!isNaN(d)) fix_time = d;
     }
-
     return { lat, lng: lon, speed_kmh: (spKn || 0) * 1.852, course_deg: course || 0, fix_time };
 }
 
-// ---- Servidores TCP ----
-const PORT_GT06 = Number(process.env.LISTEN_GT06 || 7002);   // TK103/GT06 ASCII-like
-const PORT_NMEA = Number(process.env.LISTEN_NMEA || 7010);   // NMEA (quando disponível)
+// =================== GT06 MIXED SERVER (binário + ASCII) ===================
+const PORT_GT06 = Number(process.env.LISTEN_GT06 || 7002);   // GT06 binário e TK103-like ASCII no mesmo porto
+const PORT_NMEA = Number(process.env.LISTEN_NMEA || 7010);   // NMEA puro (quando disponível)
 
-function startTcpServer(port, onLine) {
+function findGt06Header(buf, from = 0) {
+    for (let i = from; i < buf.length - 1; i++) {
+        const a = buf[i], b = buf[i + 1];
+        if ((a === 0x78 && b === 0x78) || (a === 0x79 && b === 0x79)) return i;
+    }
+    return -1;
+}
+
+function bcdToImei(b) {
+    let s = '';
+    for (const byte of b) {
+        const hi = (byte >> 4) & 0x0f;
+        const lo = byte & 0x0f;
+        s += hi.toString(10);
+        s += lo.toString(10);
+    }
+    // IMEI tem 15 dígitos; descartamos um nibble de padding
+    if (s.length >= 16) s = s.slice(1, 16);
+    return s.replace(/^0+/, (m) => m.length > 0 ? '0' : ''); // preserva zero inicial se houver
+}
+
+function parseGt06AndHandle(frame, state, socket) {
+    // frame = [0x78 0x78] len proto ... serial(2) crc(2) 0x0D 0x0A
+    if (frame.length < 12) return;
+    const len = frame[2];
+    const proto = frame[3];
+    const dataLen = len - 5; // dados sem serial+crc
+    const dataStart = 4;
+    const dataEnd = dataStart + Math.max(0, dataLen);
+    const data = frame.subarray(dataStart, dataEnd);
+    const serial = frame.subarray(dataEnd, dataEnd + 2);
+
+    if (proto === 0x01) { // LOGIN
+        if (data.length >= 8) {
+            const imei = bcdToImei(data.subarray(0, 8));
+            if (imei) {
+                state.lastImei = imei;
+                markOnlineByImei(imei).catch(() => { });
+            }
+        }
+        // *Opcional*: enviar ACK de login (omito para tolerância a variantes de CRC)
+        return;
+    }
+
+    if (proto === 0x13) { // HEARTBEAT
+        if (state.lastImei) markOnlineByImei(state.lastImei).catch(() => { });
+        return;
+    }
+
+    if (proto === 0x10 || proto === 0x12) { // POSITION
+        if (!state.lastImei) return;
+        // Estrutura típica: YY MM DD hh mm ss, gpsInfo, lat(4), lon(4), speed(1), course(2)...
+        if (data.length >= 17) {
+            const yy = 2000 + data[0], mo = data[1], dd = data[2], hh = data[3], mi = data[4], ss = data[5];
+            const fix_time = new Date(Date.UTC(yy, mo - 1, dd, hh, mi, ss));
+            const latRaw = data.readUInt32BE(7);
+            const lonRaw = data.readUInt32BE(11);
+            const speed = data[15]; // 1 byte
+            const courseRaw = data.readUInt16BE(16);
+
+            let lat = latRaw / 1800000; // graus
+            let lng = lonRaw / 1800000; // graus
+            const isSouth = (courseRaw & 0x0800) !== 0;
+            const isWest = (courseRaw & 0x1000) !== 0;
+            if (isSouth) lat = -lat;
+            if (isWest) lng = -lng;
+            const course = courseRaw & 0x03FF;
+
+            // Sanidade: coordenadas válidas
+            const okLat = Number.isFinite(lat) && Math.abs(lat) <= 90;
+            const okLng = Number.isFinite(lng) && Math.abs(lng) <= 180;
+
+            if (okLat && okLng) {
+                savePositionByImei(state.lastImei, {
+                    lat, lng,
+                    speed_kmh: speed ?? null,
+                    course_deg: course ?? null,
+                    fix_time,
+                    raw_payload: frame
+                }).catch(() => { });
+                return;
+            }
+        }
+        // Se não conseguir decodificar, ao menos manter online:
+        markOnlineByImei(state.lastImei).catch(() => { });
+        return;
+    }
+
+    // Qualquer outro protocolo: manter sessão viva
+    if (state.lastImei) markOnlineByImei(state.lastImei).catch(() => { });
+}
+
+function startGt06MixedServer(port) {
+    const srv = net.createServer((socket) => {
+        // NÃO definir encoding: precisamos de Buffer para binário
+        let binBuf = Buffer.alloc(0);
+        let asciiBuf = '';
+        const state = { lastImei: null };
+
+        socket.on('data', async (chunk) => {
+            if (!Buffer.isBuffer(chunk)) chunk = Buffer.from(chunk, 'binary');
+            // ---- 1) Binário GT06 (0x78/0x79 .... 0D0A) ----
+            binBuf = Buffer.concat([binBuf, chunk]);
+            while (true) {
+                let start = findGt06Header(binBuf);
+                if (start < 0) break;
+                // procurar marcador de fim 0D0A depois do header
+                const end = binBuf.indexOf(0x0A, start + 5); // \n
+                if (end < 0 || binBuf[end - 1] !== 0x0D) break;
+                const frame = binBuf.subarray(start, end + 1);
+                // cortar até o fim desse frame
+                const rest = binBuf.subarray(end + 1);
+                binBuf = rest;
+                // processar
+                try { parseGt06AndHandle(frame, state, socket); } catch (e) { /* tolerante */ }
+            }
+
+            // ---- 2) ASCII (TK103-like / NMEA / clones) ----
+            asciiBuf += chunk.toString('utf8');
+            let nl;
+            while ((nl = asciiBuf.indexOf('\n')) >= 0) {
+                const line = asciiBuf.slice(0, nl).replace(/\r/g, '').trim();
+                asciiBuf = asciiBuf.slice(nl + 1);
+                if (!line) continue;
+
+                // Sinal de vida TK103
+                if (line.startsWith('##')) { try { socket.write('LOAD'); } catch { } continue; }
+
+                // TK103-like
+                const tk = tryParseTK103(line);
+                if (tk?.imei && tk.lat != null) {
+                    await savePositionByImei(tk.imei, {
+                        lat: tk.lat, lng: tk.lng, speed_kmh: tk.speed_kmh ?? 0, raw_payload: Buffer.from(line)
+                    }).catch(() => { });
+                    state.lastImei = tk.imei;
+                    continue;
+                }
+                if (tk?.imei && tk.lat == null) {
+                    // Sem posição, apenas manter online
+                    await markOnlineByImei(tk.imei).catch(() => { });
+                    state.lastImei = tk.imei;
+                }
+
+                // NMEA embutido
+                const rmcIdx = line.indexOf('$GPRMC,');
+                if (rmcIdx >= 0 && (state.lastImei || tk?.imei)) {
+                    const rmc = tryParseNmeaRmc(line.slice(rmcIdx));
+                    const imei = state.lastImei || tk?.imei;
+                    if (rmc && imei) {
+                        await savePositionByImei(imei, { ...rmc, raw_payload: Buffer.from(line) }).catch(() => { });
+                        state.lastImei = imei;
+                    }
+                }
+            }
+        });
+
+        socket.on('error', (e) => console.warn('TCP socket error', e.message));
+    });
+    srv.listen(port, () => console.log(`📡 GT06/TK103 mixed TCP listening on ${port}`));
+    return srv;
+}
+
+// NMEA puro ($GPRMC...). Aqui precisamos do IMEI antes (alguns enviam numa primeira linha)
+function startNmeaServer(port) {
+    const lastImeiBySocket = new WeakMap();
     const srv = net.createServer((socket) => {
         socket.setEncoding('utf8');
         socket.on('data', async (chunk) => {
             const lines = String(chunk).replace(/\r/g, '').split('\n').map(s => s.trim()).filter(Boolean);
             for (const line of lines) {
-                try { await onLine(line, socket); } catch (e) { console.warn('parser err:', e?.message || e); }
+                const mImei = line.match(/^IMEI[:=](\d{10,20})$/i);
+                if (mImei) { lastImeiBySocket.set(socket, mImei[1]); continue; }
+                const rmc = tryParseNmeaRmc(line);
+                if (!rmc) continue;
+                const imei = lastImeiBySocket.get(socket);
+                if (!imei) continue;
+                await savePositionByImei(imei, { ...rmc, raw_payload: Buffer.from(line) }).catch(() => { });
             }
         });
         socket.on('error', (e) => console.warn('TCP socket error', e.message));
     });
-    srv.listen(port, () => console.log(`📡 TCP listening on ${port}`));
+    srv.listen(port, () => console.log(`📡 NMEA TCP listening on ${port}`));
     return srv;
 }
 
-// GT06/TK103 ASCII-ish
-startTcpServer(PORT_GT06, async (line, socket) => {
-    // alguns modelos pedem ACK “ON” para login/sinal de vida:
-    if (line.startsWith('##')) { socket.write('LOAD'); return; }
-
-    // tenta TK103-like
-    let parsed = tryParseTK103(line);
-    if (parsed?.imei && parsed.lat != null) {
-        await savePositionByImei(parsed.imei, {
-            lat: parsed.lat, lng: parsed.lng,
-            speed_kmh: parsed.speed_kmh ?? 0,
-            raw_payload: Buffer.from(line)
-        });
-        return;
-    }
-
-    // tenta NMEA RMC embutido (alguns enviam "...,$GPRMC,...")
-    const rmcIdx = line.indexOf('$GPRMC,');
-    if (parsed?.imei && rmcIdx >= 0) {
-        const rmc = tryParseNmeaRmc(line.slice(rmcIdx));
-        if (rmc) {
-            await savePositionByImei(parsed.imei, { ...rmc, raw_payload: Buffer.from(line) });
-            return;
-        }
-    }
-
-    // se não reconheceu mas tinha IMEI, ao menos mantém online
-    if (parsed?.imei) {
-        await savePositionByImei(parsed.imei, { lat: 0, lng: 0, speed_kmh: 0, raw_payload: Buffer.from(line) });
-    }
-});
-
-// NMEA puro ($GPRMC...). Aqui precisamos do IMEI antes (alguns enviam numa primeira linha)
-// Estratégia simples: se a conexão mandar "IMEI:xxxxxxxxxxxxxxx" antes do NMEA, guardamos.
-startTcpServer(PORT_NMEA, (() => {
-    const lastImeiBySocket = new WeakMap();
-    return async (line, socket) => {
-        const mImei = line.match(/^IMEI[:=](\d{10,20})$/i);
-        if (mImei) { lastImeiBySocket.set(socket, mImei[1]); return; }
-
-        const rmc = tryParseNmeaRmc(line);
-        if (!rmc) return;
-        const imei = lastImeiBySocket.get(socket);
-        if (!imei) return; // precisamos do IMEI previamente
-        await savePositionByImei(imei, { ...rmc, raw_payload: Buffer.from(line) });
-    };
-})());
+// Start servers
+startGt06MixedServer(PORT_GT06);
+startNmeaServer(PORT_NMEA);
 
 // Sinaliza OFFLINE se não recebe nada há X minutos (cron simples)
 const OFFLINE_MINUTES = Number(process.env.OFFLINE_MINUTES || 10);
@@ -580,19 +690,9 @@ setInterval(async () => {
     } catch (e) { console.warn('offline cron', e.message); }
 }, 60_000);
 
-
 // ==== Socket.IO auth opcional (somente log) ====
-io.use((socket, next) => {
-    // você pode validar o token aqui se quiser bloquear
-    // const token = socket.handshake.auth?.token;
-    next();
-});
-
-io.on('connection', (socket) => {
-    // console.log('socket connected', socket.id);
-    socket.on('disconnect', () => { /* noop */ });
-});
-
+io.use((socket, next) => { next(); });
+io.on('connection', (socket) => { socket.on('disconnect', () => { }); });
 
 // ==== Start ====
 server.listen(PORT, () => console.log(`🚀 Web server on http://localhost:${PORT}`));
