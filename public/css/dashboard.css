@@ -11,6 +11,11 @@
   --shadow-sm:0 2px 4px rgba(0,0,0,.05);
   --shadow-md:0 4px 12px rgba(0,0,0,.10);
   --shadow-lg:0 8px 18px rgba(0,0,0,.12);
+
+  /* LARGURA FLEXÍVEL DA SIDEBAR */
+  --sidebar-min: 320px;
+  --sidebar-ideal: 28vw;
+  --sidebar-max: 560px;
 }
 
 *,
@@ -89,7 +94,9 @@
 /* ================= LAYOUT ================= */
 .dashboard-wrapper{ display:flex; height:calc(100vh - 64px); margin-top:64px; }
 .sidebar{
-  flex:0 0 360px; width:360px;
+  /* largura adaptativa, não esconde nomes, nem espreme ícones */
+  flex:0 0 clamp(var(--sidebar-min), var(--sidebar-ideal), var(--sidebar-max));
+  width:clamp(var(--sidebar-min), var(--sidebar-ideal), var(--sidebar-max));
   background:var(--sidebar-bg);
   border-right:1px solid var(--sidebar-border);
   box-shadow:2px 0 4px rgba(0,0,0,.05);
@@ -117,7 +124,7 @@
 }
 
 /* ================= MAPA ================= */
-#map{ flex:1; min-width:0; }
+#map{ flex:1 1 auto; min-width:0; }
 .leaflet-container{ z-index:0; }
 
 /* ================= LISTA / GRUPOS ================= */
@@ -157,36 +164,40 @@
 /* ================= DISPOSITIVO (LINHA) ================= */
 .device-item{
   display:flex; align-items:center; justify-content:space-between;
+  gap:.5rem;
   padding:.6rem .75rem; border-bottom:1px solid var(--color-border);
 }
 .device-item:last-child{ border-bottom:0; }
 
-/* Lado esquerdo ocupa e permite ellipsis no nome */
+/* Lado esquerdo adaptável, com quebra de linha segura */
 .device-left{
   display:flex; align-items:center; gap:.5rem;
-  flex:1;               /* torna o lado esquerdo elástico */
-  min-width:0;          /* habilita ellipsis dentro do flex item */
+  flex:1;               /* ocupa o espaço disponível */
+  min-width:0;          /* permite quebra dentro do flex item */
 }
 
 .device-name{
-  font-weight:500;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
+  font-weight:300;
+  /* mostra o nome por completo, inclusive números longos */
+  white-space:normal;
+  font-size: 13px;
+  overflow-wrap:anywhere;   /* quebra sequências longas (IMEI, placas) */
+  word-break:break-word;    /* compatibilidade extra */
+  line-height:1.25;
   max-width:100%;
 }
 
 .device-status{
   font-size:.75rem; padding:.15rem .45rem; border-radius:.35rem;
-  flex-shrink:0;       /* não encolhe a badge */
+  flex-shrink:0;       /* badge não encolhe */
 }
 .device-status.online{  background:#e7f7ec; color:#1e7e34; }
 .device-status.offline{ background:#eceff3; color:#6c757d; }
 
-/* Ações fixas à direita, nunca somem */
+/* Ações fixas à direita, sempre visíveis */
 .device-actions{
   display:flex; align-items:center; gap:.25rem;
-  flex-shrink:0;       /* mantém os botões visíveis */
+  flex-shrink:0;
 }
 .action-btn{
   display:flex; align-items:center; justify-content:center;
@@ -207,7 +218,10 @@
 }
 .sidebar-dropdown.show{ opacity:1; transform:scale(1); }
 .sidebar-dropdown .item{ padding:.5rem .75rem; cursor:pointer; color:#495057; }
-.sidebar-dropdown .item:hover{ background:var(--color-light); color:var(--color-primary); }
+.sidebar-dropdown .item:hover{
+  background: var(--color-light);
+  color: var(--color-primary);
+}
 
 /* ================= PILLS DE INDICADORES (opcionais) ================= */
 .pill{
@@ -293,15 +307,22 @@
 
 /* ================= RESPONSIVIDADE ================= */
 @media (max-width: 1200px){
-  .sidebar{ flex-basis:330px; width:330px; }
+  :root{ --sidebar-ideal: 32vw; } /* um pouco mais estreita em telas médias */
 }
 @media (max-width: 992px){
-  .sidebar{ flex-basis:300px; width:300px; }
+  :root{ --sidebar-ideal: 38vw; --sidebar-max: 520px; }
   .action-btn{ width:32px; height:32px; }
+}
+@media (max-width: 768px){
+  :root{ --sidebar-ideal: 46vw; --sidebar-max: 560px; }
 }
 @media (max-width: 576px){
   .navbar.fixed-top{ padding:0 1rem; }
-  .sidebar{ flex-basis:100%; width:100%; max-width:100%; }
   .dashboard-wrapper{ flex-direction:column; }
+  .sidebar{
+    flex:0 0 100%;
+    width:100%;
+    max-width:100%;
+  }
   #map{ height:50vh; }
 }
