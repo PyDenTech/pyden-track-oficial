@@ -560,6 +560,61 @@ function extractGt06Frames(buf) {
     return { frames: out, rest: buf.subarray(i) };
 }
 
+// ==== Parser de posição GT06 (tolerante a variantes) ====
+function parseGt06Position(data) {
+    if (!data || data.length < 18) return null;
+
+    const yy = 2000 + data[0], mo = data[1], dd = data[2], hh = data[3], mi = data[4], ss = data[5];
+    const fix_time = new Date(Date.UTC(yy, mo - 1, dd, hh, mi, ss));
+
+    // GT06: lat/lon codificados como inteiro / (60*30000) = / 1_800_000
+    const latRaw = data.readUInt32BE(7);
+    const lonRaw = data.readUInt32BE(11);
+    const latBase = latRaw / 1800000;
+    const lonBase = lonRaw / 1800000;
+
+    // Alguns firmwares trocam a ordem: (speed, flags) vs (flags, speed).
+    // Tentativa A (clássica): speed em [15], flags em [16..17]
+    const speedA = data[15];
+    const flagsA = data.readUInt16BE(16);
+
+    // Tentativa B (swapFlags): flags em [15..16], speed em [17]
+    const flagsB = data.readUInt16BE(15);
+    const speedB = data[17];
+
+    function applyFlags(lat, lon, flags) {
+        // bits (conforme Traccar):
+        // bit10: 0 => Sul (lat negativa), 1 => Norte
+        // bit11: 0 => Leste, 1 => Oeste (lon negativa)
+        // bit12: validade do FIX (1 = válido)
+        const course = flags & 0x03FF;
+        const valid = (flags & (1 << 12)) !== 0;
+        const south = (flags & (1 << 10)) === 0;
+        const west = (flags & (1 << 11)) !== 0;
+        return {
+            lat: south ? -lat : lat,
+            lng: west ? -lon : lon,
+            course_deg: course,
+            valid
+        };
+    }
+
+    const A = applyFlags(latBase, lonBase, flagsA);
+    const B = applyFlags(latBase, lonBase, flagsB);
+
+    function ok(p) {
+        return Number.isFinite(p.lat) && Number.isFinite(p.lng)
+            && Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180
+            && (p.valid || (p.lat !== 0 || p.lng !== 0));
+    }
+
+    if (ok(A)) return { fix_time, lat: A.lat, lng: A.lng, course_deg: A.course_deg, speed_kmh: Number.isFinite(speedA) ? speedA : null };
+    if (ok(B)) return { fix_time, lat: B.lat, lng: B.lng, course_deg: B.course_deg, speed_kmh: Number.isFinite(speedB) ? speedB : null };
+
+    return null;
+}
+
+
 async function handleGt06Frame(frame, is79, state, socket) {
     const is78 = !is79;
     let len, hdr;
@@ -570,7 +625,10 @@ async function handleGt06Frame(frame, is79, state, socket) {
     const data = frame.subarray(hdr + 1, contentEnd);  // apenas "information content"
     const serial = frame.subarray(contentEnd, contentEnd + 2);
 
-    if (proto === 0x01) { // LOGIN
+    if (DBG) console.log('[GT06] FRAME', `proto=0x${proto.toString(16)}`, `len=${len}`, `is79=${is79}`, `imei=${state.lastImei || 'n/a'}`);
+
+    // LOGIN (0x01)
+    if (proto === 0x01) {
         if (data.length >= 8) {
             const imei = bcdToImei(data.subarray(0, 8));
             if (imei) {
@@ -583,7 +641,8 @@ async function handleGt06Frame(frame, is79, state, socket) {
         return;
     }
 
-    if (proto === 0x13) { // HEARTBEAT
+    // HEARTBEAT (0x13). Alguns modelos usam 0x23 também; manteremos 0x13 para mínimo.
+    if (proto === 0x13) {
         if (state.lastImei) {
             dlog('HB', state.lastImei);
             await markOnlineByImei(state.lastImei);
@@ -592,44 +651,25 @@ async function handleGt06Frame(frame, is79, state, socket) {
         return;
     }
 
-    if (proto === 0x10 || proto === 0x12) { // POSITION
+    // TIPOS COM GPS:
+    // clássicos: 0x10, 0x12
+    // variações comuns: 0x22 (event+gps), 0x16 (gps+status)
+    const gpsTypes = new Set([0x10, 0x12, 0x22, 0x16]);
+
+    if (gpsTypes.has(proto)) {
         if (!state.lastImei) return;
-        // YY MM DD hh mm ss, gpsInfo, lat(4), lon(4), speed(1), course(2)...
-        if (data.length >= 18) {
-            const yy = 2000 + data[0], mo = data[1], dd = data[2], hh = data[3], mi = data[4], ss = data[5];
-            const fix_time = new Date(Date.UTC(yy, mo - 1, dd, hh, mi, ss));
-            const gpsInfo = data[6];
-            const latRaw = data.readUInt32BE(7);
-            const lonRaw = data.readUInt32BE(11);
-            const speed = data[15];
-            const courseRaw = data.readUInt16BE(16);
 
-            let lat = latRaw / 1800000;
-            let lng = lonRaw / 1800000;
-            const isSouth = (courseRaw & 0x0800) !== 0;
-            const isWest = (courseRaw & 0x1000) !== 0;
-            if (isSouth) lat = -lat;
-            if (isWest) lng = -lng;
-            const course = courseRaw & 0x03FF;
-
-            const gpsOk = (gpsInfo & 0x20) !== 0; // fix em muitos firmwares
-            const okLat = Number.isFinite(lat) && Math.abs(lat) <= 90;
-            const okLng = Number.isFinite(lng) && Math.abs(lng) <= 180;
-
-            dlog('POS', state.lastImei, gpsOk ? 'FIX' : 'NOFIX', lat.toFixed(6), lng.toFixed(6), 'spd', speed, 'crs', course);
-
-            if (okLat && okLng && (gpsOk || (lat !== 0 || lng !== 0))) {
-                await savePositionByImei(state.lastImei, {
-                    lat, lng,
-                    speed_kmh: speed ?? null,
-                    course_deg: course ?? null,
-                    fix_time,
-                    raw_payload: frame
-                });
-                return;
-            }
+        const pos = parseGt06Position(data);
+        if (pos) {
+            dlog('POS', state.lastImei, pos.lat.toFixed(6), pos.lng.toFixed(6), 'spd', pos.speed_kmh ?? '-', 'crs', pos.course_deg ?? '-');
+            await savePositionByImei(state.lastImei, {
+                ...pos,
+                raw_payload: frame
+            }).catch(() => { });
+            return;
         }
-        // Sem posição válida → manter online
+
+        // Sem posição válida → manter sessão viva
         await markOnlineByImei(state.lastImei);
         return;
     }
@@ -637,6 +677,7 @@ async function handleGt06Frame(frame, is79, state, socket) {
     // Outros protocolos → manter sessão viva
     if (state.lastImei) await markOnlineByImei(state.lastImei);
 }
+
 
 function startGt06MixedServer(port) {
     const srv = net.createServer((socket) => {
