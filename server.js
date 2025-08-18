@@ -541,10 +541,12 @@ function sendGt06Ack(socket, use79, proto, serial) {
     sendGt06Response(socket, use79, proto, serial);
 }
 
-// ==== Framing (com verificação de CRC) ====
+// ==== Framing (com verificação de CRC, corrigido) ====
 function extractGt06Frames(buf) {
     const out = [];
     let i = 0;
+    const ALLOW_BAD_CRC = process.env.ALLOW_BAD_CRC === '1';
+
     while (i + 5 <= buf.length) {
         const h1 = buf[i], h2 = buf[i + 1];
         const is78 = (h1 === 0x78 && h2 === 0x78);
@@ -554,22 +556,26 @@ function extractGt06Frames(buf) {
         let len, hdr, need;
         if (is78) {
             if (i + 3 > buf.length) break;
-            len = buf[i + 2];              // 1 byte
+            len = buf[i + 2];              // 1 byte LEN
             hdr = 3;
             need = hdr + len + 2 /*CRC*/ + 2 /*0D0A*/;
         } else {
             if (i + 4 > buf.length) break;
-            len = buf.readUInt16BE(i + 2); // 2 bytes
+            len = buf.readUInt16BE(i + 2); // 2 bytes LEN
             hdr = 4;
             need = hdr + len + 2 /*CRC*/ + 2 /*0D0A*/;
         }
         if (i + need > buf.length) break;
 
-        // Verifica CRC
         const frame = buf.subarray(i, i + need);
-        const crcSeen = frame.subarray(i + need - 4, i + need - 2);
-        const crcCalc = crc16X25_bytes(frame.subarray(2, need - 2)); // do LEN até antes do CRC
-        if (crcSeen[0] === crcCalc[0] && crcSeen[1] === crcCalc[1]) {
+
+        // CRC cobre LEN + payload (protocol+content+serial)
+        const crcCalc = crc16X25_bytes(frame.subarray(2, frame.length - 2));
+        const crcSeen = frame.subarray(frame.length - 4, frame.length - 2);
+
+        const ok = (crcSeen[0] === crcCalc[0] && crcSeen[1] === crcCalc[1]);
+        if (ok || ALLOW_BAD_CRC) {
+            if (!ok) console.warn('[GT06] CRC inválido, mas aceito (ALLOW_BAD_CRC=1)');
             out.push({ frame, is79 });
         } else {
             console.warn('[GT06] CRC inválido, descartando frame');
@@ -579,6 +585,7 @@ function extractGt06Frames(buf) {
     }
     return { frames: out, rest: buf.subarray(i) };
 }
+
 
 // ==== Parser de posição GT06 (tolerante) ====
 function parseGt06Position(data) {
