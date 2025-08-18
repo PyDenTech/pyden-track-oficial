@@ -569,8 +569,8 @@ function extractGt06Frames(buf) {
 
         const frame = buf.subarray(i, i + need);
 
-        // CRC cobre LEN + payload (protocol+content+serial)
-        const crcCalc = crc16X25_bytes(frame.subarray(2, frame.length - 2));
+        // CRC cobre: LEN + payload (protocol+content+serial) — exclui os 2 bytes do CRC e o 0D0A
+        const crcCalc = crc16X25_bytes(frame.subarray(2, frame.length - 4)); // *** FIX ***
         const crcSeen = frame.subarray(frame.length - 4, frame.length - 2);
 
         const ok = (crcSeen[0] === crcCalc[0] && crcSeen[1] === crcCalc[1]);
@@ -611,7 +611,7 @@ function parseGt06Position(data) {
     function applyFlags(lat, lon, flags) {
         const course = (flags & 0x03FF);
         const valid = (flags & (1 << 12)) !== 0;
-        const south = ((flags & (1 << 10)) === 0); // bit10 “not set” => sul (comportamento dos firmwares GT06)
+        const south = ((flags & (1 << 10)) === 0); // bit10 0 => S
         const west = ((flags & (1 << 11)) !== 0);
         let la = lat, lo = lon;
         if (south) la = -la;
@@ -671,7 +671,7 @@ async function handleGt06Frame(frame, is79, state, socket) {
         return;
     }
 
-    // REQUEST DE HORA (0x8A) – responde com UTC YY MM DD hh mm ss
+    // REQUEST DE HORA (0x8A)
     if (proto === 0x8A) {
         const now = new Date();
         const buf = Buffer.from([
@@ -687,17 +687,16 @@ async function handleGt06Frame(frame, is79, state, socket) {
         return;
     }
 
-    // ADDRESS REQUEST (0x2A) – responde “NA&&NA&&0##” no 0x97 (conforme alguns firmwares)
+    // ADDRESS REQUEST (0x2A) -> responde 0x97 com "NA&&NA&&0##"
     if (proto === 0x2A) {
         const payload = Buffer.from('NA&&NA&&0##', 'ascii');
         const respContent = Buffer.concat([Buffer.from([payload.length]), Buffer.from([0, 0, 0, 0]), payload]);
-        // Em alguns modelos a resposta é cabeçalho extendido; aqui usamos use79=true para ser o mais aceito
         sendGt06Response(socket, true, 0x97, serial, respContent);
         if (state.lastImei) await markOnlineByImei(state.lastImei);
         return;
     }
 
-    // TIPOS COM GPS (lista ampliada inspirada no Traccar)
+    // TIPOS COM GPS (ampliado)
     const gpsTypes = new Set([0x10, 0x11, 0x12, 0x16, 0x22, 0x31, 0x32, 0x37, 0x2D, 0x38, 0xA0]);
     if (gpsTypes.has(proto)) {
         if (!state.lastImei) return;
@@ -713,12 +712,11 @@ async function handleGt06Frame(frame, is79, state, socket) {
             }).catch(e => console.warn('savePosition error:', e?.message || e));
             return;
         }
-        // Sem posição “aceitável” → manter online
         await markOnlineByImei(state.lastImei);
         return;
     }
 
-    // STRING/INFO (0x15/0x94 etc.) – apenas manter sessão viva
+    // STRING/INFO – manter sessão viva
     if (state.lastImei) await markOnlineByImei(state.lastImei);
 }
 
@@ -745,7 +743,7 @@ function startGt06MixedServer(port) {
                 binBuf = rest;
             }
 
-            // 2) ASCII (TK103-like / NMEA) tolerante
+            // 2) ASCII (TK103-like / NMEA)
             asciiBuf += chunk.toString('utf8');
             let nl;
             while ((nl = asciiBuf.indexOf('\n')) >= 0) {
