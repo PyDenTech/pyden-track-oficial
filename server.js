@@ -381,11 +381,16 @@ async function markOnlineByImei(imei) {
     return true;
 }
 
-/** Salva posição + atualiza "devices.last_*" e emite socket. */
+/** Salva posição + atualiza "devices.last_*" e emite socket.  (cap de payload) */
+const RAW_MAX = Number(process.env.RAW_MAX || 1024);
 async function savePositionByImei(imei, pos) {
     const dres = await pool.query(`SELECT id FROM devices WHERE imei=$1 LIMIT 1`, [String(imei)]);
     if (!dres.rowCount) return false;
     const deviceId = dres.rows[0].id;
+
+    const raw = pos.raw_payload
+        ? (Buffer.isBuffer(pos.raw_payload) ? pos.raw_payload : Buffer.from(String(pos.raw_payload)))
+        : null;
 
     const p = {
         device_id: deviceId,
@@ -398,7 +403,7 @@ async function savePositionByImei(imei, pos) {
         hdop: pos.hdop ?? null,
         ignition: typeof pos.ignition === 'boolean' ? pos.ignition : null,
         battery_v: pos.battery_v ?? null,
-        raw_payload: pos.raw_payload || null
+        raw_payload: raw ? raw.subarray(0, RAW_MAX) : null
     };
 
     await pool.query(`
@@ -502,8 +507,8 @@ function bcdToImei(b) {
     return s;
 }
 
-// CRC16/X25 (usado por GT06/Concox)
-function crc16X25(buf) {
+// CRC16/X25 (usado por GT06/Concox) – retorna [hi, lo]
+function crc16X25_bytes(buf) {
     let crc = 0xFFFF;
     for (let i = 0; i < buf.length; i++) {
         crc ^= buf[i];
@@ -517,20 +522,26 @@ function crc16X25(buf) {
     return Buffer.from([hi, lo]);
 }
 
-// ACK para LOGIN(0x01)/HEARTBEAT(0x13)
-function sendGt06Ack(socket, use79, proto, serial /*Buffer[2]*/) {
+// ===== Respostas =====
+function sendGt06Response(socket, use79, proto, serial /*Buffer[2]*/, content /*Buffer|undefined*/) {
     const hdr = use79 ? Buffer.from([0x79, 0x79]) : Buffer.from([0x78, 0x78]);
-    const len = use79 ? Buffer.from([0x00, 0x05]) : Buffer.from([0x05]);
-    // payload de ACK: <proto> 0x00 0x01 <serial_hi> <serial_lo>
-    const content = Buffer.from([proto, 0x00, 0x01, serial[0], serial[1]]);
-    const forCrc = Buffer.concat([len, content]); // CRC cobre LEN + CONTENT
-    const crc = crc16X25(forCrc);
+    const contentBuf = content ? Buffer.from(content) : Buffer.alloc(0);
+    // comprimento = 1(protocol) + content + 2(serial)
+    const lenVal = 1 + contentBuf.length + 2;
+    const len = use79 ? Buffer.from([(lenVal >>> 8) & 0xFF, lenVal & 0xFF]) : Buffer.from([lenVal & 0xFF]);
+    const payload = Buffer.concat([Buffer.from([proto]), contentBuf, serial]);
+    const crc = crc16X25_bytes(Buffer.concat([len, payload]));
     const tail = Buffer.from([0x0D, 0x0A]);
-    const ack = Buffer.concat([hdr, len, content, crc, tail]);
-    try { socket.write(ack); dlog('ACK sent', `proto=0x${proto.toString(16)}`, `serial=${serial.toString('hex')}`, `use79=${use79}`); } catch { }
+    const msg = Buffer.concat([hdr, len, payload, crc, tail]);
+    try { socket.write(msg); dlog('RESP sent', `proto=0x${proto.toString(16)}`, `serial=${serial.toString('hex')}`, `use79=${use79}`); } catch { }
 }
 
-// Extrai frames completos (0x78/0x79) por comprimento
+// ACK simplificado (sem content)
+function sendGt06Ack(socket, use79, proto, serial) {
+    sendGt06Response(socket, use79, proto, serial);
+}
+
+// ==== Framing (com verificação de CRC) ====
 function extractGt06Frames(buf) {
     const out = [];
     let i = 0;
@@ -552,12 +563,68 @@ function extractGt06Frames(buf) {
             hdr = 4;
             need = hdr + len + 2 /*CRC*/ + 2 /*0D0A*/;
         }
-
         if (i + need > buf.length) break;
-        out.push({ frame: buf.subarray(i, i + need), is79 });
+
+        // Verifica CRC
+        const frame = buf.subarray(i, i + need);
+        const crcSeen = frame.subarray(i + need - 4, i + need - 2);
+        const crcCalc = crc16X25_bytes(frame.subarray(2, need - 2)); // do LEN até antes do CRC
+        if (crcSeen[0] === crcCalc[0] && crcSeen[1] === crcCalc[1]) {
+            out.push({ frame, is79 });
+        } else {
+            console.warn('[GT06] CRC inválido, descartando frame');
+        }
+
         i += need;
     }
     return { frames: out, rest: buf.subarray(i) };
+}
+
+// ==== Parser de posição GT06 (tolerante) ====
+function parseGt06Position(data) {
+    if (data.length < 18) return null;
+
+    const yy = 2000 + data[0], mo = data[1], dd = data[2], hh = data[3], mi = data[4], ss = data[5];
+    const fix_time = new Date(Date.UTC(yy, mo - 1, dd, hh, mi, ss));
+
+    const latRaw = data.readUInt32BE(7);
+    const lonRaw = data.readUInt32BE(11);
+    // Conversão equivalente ao Traccar: /60/30000 = /1_800_000
+    let latDeg = latRaw / 1800000;
+    let lonDeg = lonRaw / 1800000;
+
+    // A) speed depois de flags? ou B) speed antes? (tentar os dois)
+    // Caminho A (clássico): speed(1) [15], flags(2) [16..17]
+    let speedA = data[15];
+    let flagsA = data.readUInt16BE(16);
+    // Caminho B (swapFlags): flags(2) [15..16], speed(1) [17]
+    let flagsB = data.readUInt16BE(15);
+    let speedB = data[17];
+
+    function applyFlags(lat, lon, flags) {
+        const course = (flags & 0x03FF);
+        const valid = (flags & (1 << 12)) !== 0;
+        const south = ((flags & (1 << 10)) === 0); // bit10 “not set” => sul (comportamento dos firmwares GT06)
+        const west = ((flags & (1 << 11)) !== 0);
+        let la = lat, lo = lon;
+        if (south) la = -la;
+        if (west) lo = -lo;
+        return { la, lo, course, valid };
+    }
+
+    const A = applyFlags(latDeg, lonDeg, flagsA);
+    const B = applyFlags(latDeg, lonDeg, flagsB);
+
+    function ok(p) {
+        return Number.isFinite(p.la) && Number.isFinite(p.lo)
+            && Math.abs(p.la) <= 90 && Math.abs(p.lo) <= 180
+            && (p.valid || (p.la !== 0 || p.lo !== 0));
+    }
+
+    if (ok(A)) return { fix_time, lat: A.la, lng: A.lo, speed_kmh: Number.isFinite(speedA) ? speedA : null, course_deg: A.course, valid: A.valid };
+    if (ok(B)) return { fix_time, lat: B.la, lng: B.lo, speed_kmh: Number.isFinite(speedB) ? speedB : null, course_deg: B.course, valid: B.valid };
+
+    return null;
 }
 
 async function handleGt06Frame(frame, is79, state, socket) {
@@ -570,7 +637,11 @@ async function handleGt06Frame(frame, is79, state, socket) {
     const data = frame.subarray(hdr + 1, contentEnd);  // apenas "information content"
     const serial = frame.subarray(contentEnd, contentEnd + 2);
 
-    if (proto === 0x01) { // LOGIN
+    console.log('[GT06] FRAME', `proto=0x${proto.toString(16)}`, `len=${len}`, `is79=${is79}`, `imei=${state.lastImei || 'n/a'}`);
+    if (DBG) console.log('[GT06] DATAHEX proto=0x' + proto.toString(16), data.toString('hex'));
+
+    // LOGIN (0x01)
+    if (proto === 0x01) {
         if (data.length >= 8) {
             const imei = bcdToImei(data.subarray(0, 8));
             if (imei) {
@@ -583,58 +654,64 @@ async function handleGt06Frame(frame, is79, state, socket) {
         return;
     }
 
-    if (proto === 0x13) { // HEARTBEAT
+    // HEARTBEAT: 0x13 (clássico) e 0x23 (alguns modelos)
+    if (proto === 0x13 || proto === 0x23) {
         if (state.lastImei) {
             dlog('HB', state.lastImei);
             await markOnlineByImei(state.lastImei);
-            sendGt06Ack(socket, is79, 0x13, serial);
+            sendGt06Ack(socket, is79, proto, serial);
         }
         return;
     }
 
-    if (proto === 0x10 || proto === 0x12) { // POSITION
+    // REQUEST DE HORA (0x8A) – responde com UTC YY MM DD hh mm ss
+    if (proto === 0x8A) {
+        const now = new Date();
+        const buf = Buffer.from([
+            (now.getUTCFullYear() - 2000) & 0xFF,
+            now.getUTCMonth() + 1,
+            now.getUTCDate(),
+            now.getUTCHours(),
+            now.getUTCMinutes(),
+            now.getUTCSeconds()
+        ]);
+        sendGt06Response(socket, is79, 0x8A, serial, buf);
+        if (state.lastImei) await markOnlineByImei(state.lastImei);
+        return;
+    }
+
+    // ADDRESS REQUEST (0x2A) – responde “NA&&NA&&0##” no 0x97 (conforme alguns firmwares)
+    if (proto === 0x2A) {
+        const payload = Buffer.from('NA&&NA&&0##', 'ascii');
+        const respContent = Buffer.concat([Buffer.from([payload.length]), Buffer.from([0, 0, 0, 0]), payload]);
+        // Em alguns modelos a resposta é cabeçalho extendido; aqui usamos use79=true para ser o mais aceito
+        sendGt06Response(socket, true, 0x97, serial, respContent);
+        if (state.lastImei) await markOnlineByImei(state.lastImei);
+        return;
+    }
+
+    // TIPOS COM GPS (lista ampliada inspirada no Traccar)
+    const gpsTypes = new Set([0x10, 0x11, 0x12, 0x16, 0x22, 0x31, 0x32, 0x37, 0x2D, 0x38, 0xA0]);
+    if (gpsTypes.has(proto)) {
         if (!state.lastImei) return;
-        // YY MM DD hh mm ss, gpsInfo, lat(4), lon(4), speed(1), course(2)...
-        if (data.length >= 18) {
-            const yy = 2000 + data[0], mo = data[1], dd = data[2], hh = data[3], mi = data[4], ss = data[5];
-            const fix_time = new Date(Date.UTC(yy, mo - 1, dd, hh, mi, ss));
-            const gpsInfo = data[6];
-            const latRaw = data.readUInt32BE(7);
-            const lonRaw = data.readUInt32BE(11);
-            const speed = data[15];
-            const courseRaw = data.readUInt16BE(16);
 
-            let lat = latRaw / 1800000;
-            let lng = lonRaw / 1800000;
-            const isSouth = (courseRaw & 0x0800) !== 0;
-            const isWest = (courseRaw & 0x1000) !== 0;
-            if (isSouth) lat = -lat;
-            if (isWest) lng = -lng;
-            const course = courseRaw & 0x03FF;
+        const pos = parseGt06Position(data);
+        if (pos) {
+            dlog('POS', state.lastImei, pos.valid ? 'FIX' : 'NOFIX',
+                pos.lat.toFixed(6), pos.lng.toFixed(6), 'spd', pos.speed_kmh ?? '-', 'crs', pos.course_deg ?? '-');
 
-            const gpsOk = (gpsInfo & 0x20) !== 0; // fix em muitos firmwares
-            const okLat = Number.isFinite(lat) && Math.abs(lat) <= 90;
-            const okLng = Number.isFinite(lng) && Math.abs(lng) <= 180;
-
-            dlog('POS', state.lastImei, gpsOk ? 'FIX' : 'NOFIX', lat.toFixed(6), lng.toFixed(6), 'spd', speed, 'crs', course);
-
-            if (okLat && okLng && (gpsOk || (lat !== 0 || lng !== 0))) {
-                await savePositionByImei(state.lastImei, {
-                    lat, lng,
-                    speed_kmh: speed ?? null,
-                    course_deg: course ?? null,
-                    fix_time,
-                    raw_payload: frame
-                });
-                return;
-            }
+            await savePositionByImei(state.lastImei, {
+                ...pos,
+                raw_payload: frame
+            }).catch(e => console.warn('savePosition error:', e?.message || e));
+            return;
         }
-        // Sem posição válida → manter online
+        // Sem posição “aceitável” → manter online
         await markOnlineByImei(state.lastImei);
         return;
     }
 
-    // Outros protocolos → manter sessão viva
+    // STRING/INFO (0x15/0x94 etc.) – apenas manter sessão viva
     if (state.lastImei) await markOnlineByImei(state.lastImei);
 }
 
@@ -644,16 +721,19 @@ function startGt06MixedServer(port) {
         let asciiBuf = '';
         const state = { lastImei: null };
 
+        try { socket.setKeepAlive(true, 30_000); } catch { }
+
         socket.on('data', async (chunk) => {
             if (!Buffer.isBuffer(chunk)) chunk = Buffer.from(chunk, 'binary');
 
-            // 1) Frames binários GT06
+            // 1) Frames binários GT06 (com CRC)
             binBuf = Buffer.concat([binBuf, chunk]);
             while (true) {
                 const { frames, rest } = extractGt06Frames(binBuf);
                 if (!frames.length) break;
                 for (const fr of frames) {
-                    try { await handleGt06Frame(fr.frame, fr.is79, state, socket); } catch { }
+                    try { await handleGt06Frame(fr.frame, fr.is79, state, socket); }
+                    catch (e) { console.warn('handleGt06Frame error:', e?.message || e); }
                 }
                 binBuf = rest;
             }
@@ -670,7 +750,8 @@ function startGt06MixedServer(port) {
 
                 const tk = tryParseTK103(line);
                 if (tk?.imei && tk.lat != null) {
-                    await savePositionByImei(tk.imei, { lat: tk.lat, lng: tk.lng, speed_kmh: tk.speed_kmh ?? 0, raw_payload: Buffer.from(line) }).catch(() => { });
+                    await savePositionByImei(tk.imei, { lat: tk.lat, lng: tk.lng, speed_kmh: tk.speed_kmh ?? 0, raw_payload: Buffer.from(line) })
+                        .catch(e => console.warn('save TK103 pos error:', e?.message || e));
                     state.lastImei = tk.imei;
                     continue;
                 }
@@ -684,7 +765,8 @@ function startGt06MixedServer(port) {
                     const rmc = tryParseNmeaRmc(line.slice(rmcIdx));
                     const imei = state.lastImei || tk?.imei;
                     if (rmc && imei) {
-                        await savePositionByImei(imei, { ...rmc, raw_payload: Buffer.from(line) }).catch(() => { });
+                        await savePositionByImei(imei, { ...rmc, raw_payload: Buffer.from(line) })
+                            .catch(e => console.warn('save NMEA pos error:', e?.message || e));
                         state.lastImei = imei;
                     }
                 }
@@ -702,6 +784,8 @@ function startNmeaServer(port) {
     const lastImeiBySocket = new WeakMap();
     const srv = net.createServer((socket) => {
         socket.setEncoding('utf8');
+        try { socket.setKeepAlive(true, 30_000); } catch { }
+
         socket.on('data', async (chunk) => {
             const lines = String(chunk).replace(/\r/g, '').split('\n').map(s => s.trim()).filter(Boolean);
             for (const line of lines) {
@@ -711,7 +795,8 @@ function startNmeaServer(port) {
                 if (!rmc) continue;
                 const imei = lastImeiBySocket.get(socket);
                 if (!imei) continue;
-                await savePositionByImei(imei, { ...rmc, raw_payload: Buffer.from(line) }).catch(() => { });
+                await savePositionByImei(imei, { ...rmc, raw_payload: Buffer.from(line) })
+                    .catch(e => console.warn('save NMEA pos error:', e?.message || e));
             }
         });
         socket.on('error', (e) => console.warn('TCP socket error', e.message));
