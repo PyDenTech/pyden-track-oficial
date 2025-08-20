@@ -209,3 +209,9 @@ SELECT
 FROM devices
 GROUP BY 1
 ORDER BY 1;
+
+PGSSLMODE=require psql \
+  -h pyden-track.cjucwyoced9l.sa-east-1.rds.amazonaws.com \
+  -p 5432 \
+  -U postgres \
+  -d pyden-track-oficial
